@@ -1,0 +1,21 @@
+# AI assistant context
+.claude/
+.codely/
+.codely-cli/
+CODELY.md
+
+# Internal workflow plans (not part of the tool)
+Plan/
+Plan.meta
+
+# Unity
+*.csproj
+*.sln
+*.suo
+*.user
+*.pidb
+*.booproj
+*.unityproj
+*.DS_Store
+*.tmp
+*.log
