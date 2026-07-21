@@ -65,6 +65,8 @@ namespace ModelBox
         /// <summary>
         /// 采样鼠标位置的物体信息，根据调试模式计算 R/G/B/A。
         /// R/G/B/A 值与 shader 编码一致（与屏幕上显示的颜色对应）。
+        /// [fix v0.4.3] 修复预制体穿透：Physics.Raycast 命中后检查是否有更近的无 Collider Renderer
+        /// 被射线穿透（预制体常见：根节点无 Collider，子模型有 Collider 或完全无 Collider）。
         /// </summary>
         private static void SampleAtMouse(SceneView sceneView, Vector2 mousePos)
         {
@@ -96,87 +98,91 @@ namespace ModelBox
             Physics.SyncTransforms();
 
             float maxDist = Mathf.Min(camera.farClipPlane, 5000f);
-            if (Physics.Raycast(ray, out RaycastHit hit, maxDist))
-            {
-                _hasData = true;
-                _hitName = hit.collider.gameObject.name;
-                _worldPos = hit.point;
-                _uvWarning = ""; // [fix v0.4] 每次采样重置 UV 警告
 
-                // [fix v0.4] Renderer 查找：优先 Collider 同级 → 父级 → 根的子级
-                // 之前的 GetComponentInChildren 深度优先搜索在复杂层级中可能返回错误子级
-                var hitRenderer = hit.collider.GetComponent<Renderer>();
+            // [fix v0.4.3] 统一拾取策略：先做 CPU mesh raycast 找到最近的可见 Renderer，
+            // 再与 Physics.Raycast 结果比较取更近的。
+            // 这解决了预制体无 Collider 被穿透的问题。
+
+            // Step 1: CPU mesh raycast 找最近 Renderer
+            Renderer meshHitRenderer = null;
+            MeshRaycastUtility.MeshRayHit meshHit = default;
+            float meshHitDist = float.MaxValue;
+
+            var candidates = MeshRaycastUtility.PickNearestRenderers(ray, camera);
+            if (candidates != null)
+            {
+                foreach (var rend in candidates)
+                {
+                    if (MeshRaycastUtility.Raycast(ray, rend, out var hit))
+                    {
+                        if (hit.distance < meshHitDist)
+                        {
+                            meshHitDist = hit.distance;
+                            meshHitRenderer = rend;
+                            meshHit = hit;
+                        }
+                    }
+                }
+            }
+
+            // Step 2: Physics.Raycast 找最近 Collider 命中
+            RaycastHit physicsHit;
+            bool physicsHitValid = Physics.Raycast(ray, out physicsHit, maxDist);
+
+            // Step 3: 比较两个结果，取距离更近的
+            if (physicsHitValid && physicsHit.distance <= meshHitDist)
+            {
+                // Physics 命中更近（或 mesh 未命中）—— 使用 Physics 结果
+                _hasData = true;
+                _hitName = physicsHit.collider.gameObject.name;
+                _worldPos = physicsHit.point;
+                _uvWarning = "";
+
+                // Renderer 查找：优先 Collider 同级 → 父级 → 根的子级
+                var hitRenderer = physicsHit.collider.GetComponent<Renderer>();
                 if (hitRenderer == null)
-                    hitRenderer = hit.collider.GetComponentInParent<Renderer>();
+                    hitRenderer = physicsHit.collider.GetComponentInParent<Renderer>();
                 if (hitRenderer == null)
-                    hitRenderer = hit.collider.transform.root.GetComponentInChildren<Renderer>();
+                    hitRenderer = physicsHit.collider.transform.root.GetComponentInChildren<Renderer>();
 
                 _shaderName = (hitRenderer != null && hitRenderer.sharedMaterial != null)
                     ? hitRenderer.sharedMaterial.shader.name : "";
                 var mode = ModelBoxManager.Instance?.CurrentMode ?? DebugViewMode.None;
-                _depth = hit.distance;
+                _depth = physicsHit.distance;
 
                 var params2 = ModelBoxManager.Instance?.CurrentParameters ?? default;
                 float scale = params2.Scale;
                 float depthRange = params2.DepthRange;
 
-                // [fix v0.4] 使用统一的 ComputeChannelValues 方法，修复 LocalPosition Transform 问题
-                var rendererTransform = hitRenderer != null ? hitRenderer.transform : hit.collider.transform;
-                ComputeChannelValues(mode, hit.point, hit.normal, hit.textureCoord,
-                    hit.distance, rendererTransform, scale, depthRange, camera);
+                var rendererTransform = hitRenderer != null ? hitRenderer.transform : physicsHit.collider.transform;
+                ComputeChannelValues(mode, physicsHit.point, physicsHit.normal, physicsHit.textureCoord,
+                    physicsHit.distance, rendererTransform, scale, depthRange, camera);
 
                 ReadCustomProperty(hitRenderer);
             }
+            else if (meshHitRenderer != null)
+            {
+                // CPU mesh raycast 命中更近（或 Physics 未命中）—— 使用 mesh 结果
+                _hasData = true;
+                _hitName = meshHitRenderer.gameObject.name;
+                _worldPos = meshHit.point;
+                _uvWarning = "";
+                _shaderName = (meshHitRenderer.sharedMaterial != null)
+                    ? meshHitRenderer.sharedMaterial.shader.name : "";
+                var mode = ModelBoxManager.Instance?.CurrentMode ?? DebugViewMode.None;
+                _depth = meshHit.distance;
+
+                var params3 = ModelBoxManager.Instance?.CurrentParameters ?? default;
+                float scale3 = params3.Scale;
+                float depthRange3 = params3.DepthRange;
+
+                ComputeChannelValues(mode, meshHit.point, meshHit.normal, meshHit.textureCoord,
+                    meshHit.distance, meshHitRenderer.transform, scale3, depthRange3, camera);
+
+                ReadCustomProperty(meshHitRenderer);
+            }
             else
             {
-                // [fix v0.4] Physics.Raycast 未命中（物体可能无 Collider）：
-                // 使用 Bounds-Ray 拾取 + CPU 射线-网格求交（不依赖 Collider，不触发递归渲染）
-                // 改进：PickNearestRenderers 返回所有 Bounds 命中的 Renderer（按距离排序），
-                // 然后逐个做 mesh raycast 取最近命中，避免只检查一个 Renderer 导致遗漏
-                var mode = ModelBoxManager.Instance?.CurrentMode ?? DebugViewMode.None;
-                var candidates = MeshRaycastUtility.PickNearestRenderers(ray, camera);
-
-                if (candidates != null && candidates.Count > 0)
-                {
-                    float closestMeshDist = float.MaxValue;
-                    Renderer bestRenderer = null;
-                    MeshRaycastUtility.MeshRayHit bestHit = default;
-
-                    foreach (var rend in candidates)
-                    {
-                        if (MeshRaycastUtility.Raycast(ray, rend, out var meshHit))
-                        {
-                            if (meshHit.distance < closestMeshDist)
-                            {
-                                closestMeshDist = meshHit.distance;
-                                bestRenderer = rend;
-                                bestHit = meshHit;
-                            }
-                        }
-                    }
-
-                    if (bestRenderer != null)
-                    {
-                        _hasData = true;
-                        _hitName = bestRenderer.gameObject.name;
-                        _worldPos = bestHit.point;
-                        _uvWarning = "";
-                        _shaderName = (bestRenderer.sharedMaterial != null)
-                            ? bestRenderer.sharedMaterial.shader.name : "";
-                        _depth = bestHit.distance;
-
-                        var params3 = ModelBoxManager.Instance?.CurrentParameters ?? default;
-                        float scale3 = params3.Scale;
-                        float depthRange3 = params3.DepthRange;
-
-                        ComputeChannelValues(mode, bestHit.point, bestHit.normal, bestHit.textureCoord,
-                            bestHit.distance, bestRenderer.transform, scale3, depthRange3, camera);
-
-                        ReadCustomProperty(bestRenderer);
-                        return;
-                    }
-                }
-
                 _hasData = false;
                 _chR = _chG = _chB = _chA = _depth = 0;
                 _hitName = "";
