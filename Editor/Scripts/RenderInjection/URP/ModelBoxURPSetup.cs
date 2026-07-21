@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -100,36 +101,53 @@ namespace ModelBox
 
         /// <summary>
         /// 卸载 Feature。
+        /// [fix v0.4.1] 同时从所有 Renderer Data 移除（与安装对称）。
         /// </summary>
         public static bool RemoveFeatureFromActiveRenderer()
         {
-            var rendererData = GetActiveRendererData();
-            if (rendererData == null) return true;
-
-            var so = new SerializedObject(rendererData);
-            var featuresProp = so.FindProperty("m_RendererFeatures");
-
-            if (featuresProp == null) return true;
-
-            bool removed = false;
-            for (int i = featuresProp.arraySize - 1; i >= 0; i--)
+            // [fix v0.4.1] 获取所有 Renderer Data（与 AddFeatureToActiveRenderer 对称）
+            var allRendererDatas = GetAllRendererDatas();
+            if (allRendererDatas.Count == 0)
             {
-                var element = featuresProp.GetArrayElementAtIndex(i);
-                if (element.objectReferenceValue is ModelBoxRendererFeature)
+                var rendererData = GetActiveRendererData();
+                if (rendererData == null) return true;
+                allRendererDatas.Add(rendererData);
+            }
+
+            bool anyRemoved = false;
+            foreach (var rendererData in allRendererDatas)
+            {
+                var so = new SerializedObject(rendererData);
+                var featuresProp = so.FindProperty("m_RendererFeatures");
+
+                if (featuresProp == null) continue;
+
+                bool removed = false;
+                for (int i = featuresProp.arraySize - 1; i >= 0; i--)
                 {
-                    var obj = element.objectReferenceValue;
-                    element.objectReferenceValue = null;
-                    featuresProp.DeleteArrayElementAtIndex(i);
-                    if (obj != null)
-                        Object.DestroyImmediate(obj, true);
-                    removed = true;
+                    var element = featuresProp.GetArrayElementAtIndex(i);
+                    if (element.objectReferenceValue is ModelBoxRendererFeature)
+                    {
+                        var obj = element.objectReferenceValue;
+                        element.objectReferenceValue = null;
+                        featuresProp.DeleteArrayElementAtIndex(i);
+                        if (obj != null)
+                            Object.DestroyImmediate(obj, true);
+                        removed = true;
+                    }
+                }
+
+                if (removed)
+                {
+                    so.ApplyModifiedProperties();
+                    EditorUtility.SetDirty(rendererData);
+                    anyRemoved = true;
+                    Debug.Log($"[ModelBox] 已从 Renderer {rendererData.name} 移除 Feature。");
                 }
             }
 
-            if (removed)
+            if (anyRemoved)
             {
-                so.ApplyModifiedProperties();
-                EditorUtility.SetDirty(rendererData);
                 AssetDatabase.SaveAssets();
                 Debug.Log("[ModelBox] 卸载完成。");
             }

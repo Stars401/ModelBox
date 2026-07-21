@@ -203,18 +203,28 @@ namespace ModelBox
             // 全屏三角形 Blit 在 stereo rendering 下只覆盖单眼，会导致显示异常
             // Geometry overrideMaterial 模式（DrawRenderers）不受影响，仍可使用
             bool isStereo = renderingData.cameraData.camera.stereoEnabled;
+
+            // Depth(7) 和 ScreenNormal(17) 已迁移到 ScreenSpace 路径
+            bool needsDepth = (manager.CurrentMode == DebugViewMode.DiagRawDepth);
+
+            bool needsOpaqueTex = (manager.CurrentMode == DebugViewMode.OpaqueTexture);
+
+            bool needsOverdraw = (manager.CurrentMode == DebugViewMode.Overdraw);
+
+            bool needsShadowMap = (manager.CurrentMode == DebugViewMode.ShadowMap);
+
+            bool needsTransparency = (manager.CurrentMode == DebugViewMode.TransparencyLayers);
+
+            // ScreenSpace 路径：只有 Depth(7) 和 ScreenNormal(17) 从深度缓冲重建
+            // WorldPosition(1), NdotV(20), Fresnel(21), FlatNormal(16) 走 Geometry overrideMaterial 路径
             bool needsScreenSpace = (manager.CurrentMode == DebugViewMode.Depth ||
                                      manager.CurrentMode == DebugViewMode.ScreenNormal ||
                                      manager.CurrentMode == DebugViewMode.RayMarch);
-            bool needsOpaqueTex = (manager.CurrentMode == DebugViewMode.OpaqueTexture);
-            bool needsOverdraw = (manager.CurrentMode == DebugViewMode.Overdraw);
-            bool needsShadowMap = (manager.CurrentMode == DebugViewMode.ShadowMap);
-            bool needsTransparency = (manager.CurrentMode == DebugViewMode.TransparencyLayers);
 
+            // [fix v0.4] VR/XR: 立体渲染相机跳过全屏 Blit 模式（变量已在上文声明，此处仅做检测）
             if (isStereo && (needsScreenSpace || needsOpaqueTex || needsOverdraw || needsShadowMap || needsTransparency || manager.SplitScreenEnabled))
             {
                 // VR 模式下全屏 Blit 不可用，仅保留 Geometry overrideMaterial 模式
-                // 自动降级为仅 Geometry 模式
                 var geometryModes = !needsScreenSpace && !needsOpaqueTex && !needsOverdraw && !needsShadowMap && !needsTransparency;
                 if (!geometryModes)
                 {
@@ -240,23 +250,6 @@ namespace ModelBox
                 normalSceneCapturePass.renderPassEvent = RenderPassEvent.AfterRenderingTransparents;
                 renderer.EnqueuePass(normalSceneCapturePass);
             }
-
-            // Depth(7) 和 ScreenNormal(17) 已迁移到 ScreenSpace 路径
-            bool needsDepth = (manager.CurrentMode == DebugViewMode.DiagRawDepth);
-
-            bool needsOpaqueTex = (manager.CurrentMode == DebugViewMode.OpaqueTexture);
-
-            bool needsOverdraw = (manager.CurrentMode == DebugViewMode.Overdraw);
-
-            bool needsShadowMap = (manager.CurrentMode == DebugViewMode.ShadowMap);
-
-            bool needsTransparency = (manager.CurrentMode == DebugViewMode.TransparencyLayers);
-
-            // ScreenSpace 路径：只有 Depth(7) 和 ScreenNormal(17) 从深度缓冲重建
-            // WorldPosition(1), NdotV(20), Fresnel(21), FlatNormal(16) 走 Geometry overrideMaterial 路径
-            bool needsScreenSpace = (manager.CurrentMode == DebugViewMode.Depth ||
-                                     manager.CurrentMode == DebugViewMode.ScreenNormal ||
-                                     manager.CurrentMode == DebugViewMode.RayMarch);
 
             // ScreenSpace 模式的 ViewMode 映射（只含 Depth 和 ScreenNormal）
             int screenSpaceViewMode = -1;

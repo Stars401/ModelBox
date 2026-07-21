@@ -645,8 +645,9 @@ namespace ModelBox
                 }
             }
 
-            // 主 Renderer 的引用（用于 UI 显示和静态镜像）
-            _savedOriginals = _targetRenderer.sharedMaterials;
+            // [fix v0.4.1] _savedOriginals 必须引用原始材质数组，而非替换后的
+            // _allSavedOriginals[0] 是主 Renderer 的原始材质（在替换前保存的）
+            _savedOriginals = _allSavedOriginals.Count > 0 ? _allSavedOriginals[0] : _targetRenderer.sharedMaterials;
             _isPreviewing = true;
 
             // 同步静态镜像（域重载安全网）
