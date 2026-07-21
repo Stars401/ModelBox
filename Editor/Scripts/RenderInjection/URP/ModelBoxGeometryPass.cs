@@ -176,9 +176,29 @@ namespace ModelBox
 
         // ===== SEL 模式辅助方法 =====
 
-        // 使用 Layer 31（通常未使用）作为临时过滤层
-        private const int SelLayer = 31;
-        private const int SelLayerMask = 1 << SelLayer;
+        // [fix v0.4] SEL 模式 Layer 选择：优先使用空闲 Layer，避免与项目冲突
+        // 从 31 向下查找第一个未被项目定义的 Layer
+        private static int _selLayer = -1;
+        private static int SelLayer
+        {
+            get
+            {
+                if (_selLayer >= 0) return _selLayer;
+                // 从 31 向下查找未使用的 Layer（Layer 名称为空 = 未被项目定义）
+                for (int i = 31; i >= 28; i--)
+                {
+                    if (string.IsNullOrEmpty(UnityEngine.LayerMask.LayerToName(i)))
+                    {
+                        _selLayer = i;
+                        return _selLayer;
+                    }
+                }
+                // 所有备选 Layer 都被占用，回退到 31（会触发警告）
+                _selLayer = 31;
+                return _selLayer;
+            }
+        }
+        private static int SelLayerMask => 1 << SelLayer;
 
         /// <summary>获取选中物体及其所有子物体的 Transform 列表。</summary>
         private static List<Transform> GetSelectedHierarchy()
@@ -238,6 +258,12 @@ namespace ModelBox
 
             if (width <= 0 || height <= 0) return;
 
+            // [fix v0.4] HDR 兼容性：根据相机 HDR 设置选择 RT 格式
+            bool isHdr = renderingData.cameraData.isHdrEnabled;
+            var hdrFormat = GraphicsFormat.R16G16B16A16_SFloat;
+            var ldrFormat = GraphicsFormat.R8G8B8A8_SRGB;
+            var captureFormat = isHdr ? hdrFormat : ldrFormat;
+
             // 按需分配/重新分配持久 RTHandle
             if (_opaqueCaptureHandle == null ||
                 _opaqueCaptureHandle.rt == null ||
@@ -246,7 +272,7 @@ namespace ModelBox
             {
                 _opaqueCaptureHandle?.Release();
                 _opaqueCaptureHandle = RTHandles.Alloc(width, height,
-                    colorFormat: GraphicsFormat.R8G8B8A8_SRGB,
+                    colorFormat: captureFormat,
                     filterMode: FilterMode.Bilinear,
                     name: "_ModelBoxOpaqueCapture");
             }
@@ -285,6 +311,10 @@ namespace ModelBox
 
             if (width <= 0 || height <= 0) return;
 
+            // [fix v0.4] HDR 兼容性
+            bool isHdr = renderingData.cameraData.isHdrEnabled;
+            var captureFormat = isHdr ? GraphicsFormat.R16G16B16A16_SFloat : GraphicsFormat.R8G8B8A8_SRGB;
+
             // 按需分配/重新分配
             if (_normalSceneCaptureHandle == null ||
                 _normalSceneCaptureHandle.rt == null ||
@@ -293,7 +323,7 @@ namespace ModelBox
             {
                 _normalSceneCaptureHandle?.Release();
                 _normalSceneCaptureHandle = RTHandles.Alloc(width, height,
-                    colorFormat: GraphicsFormat.R8G8B8A8_SRGB,
+                    colorFormat: captureFormat,
                     filterMode: FilterMode.Bilinear,
                     name: "_ModelBoxNormalSceneCapture");
             }
@@ -488,6 +518,10 @@ namespace ModelBox
 
             if (width <= 0 || height <= 0) return;
 
+            // [fix v0.4] HDR 兼容性
+            bool isHdr = renderingData.cameraData.isHdrEnabled;
+            var captureFormat = isHdr ? GraphicsFormat.R16G16B16A16_SFloat : GraphicsFormat.R8G8B8A8_SRGB;
+
             if (_debugSceneCaptureHandle == null ||
                 _debugSceneCaptureHandle.rt == null ||
                 _debugSceneCaptureHandle.rt.width != width ||
@@ -495,7 +529,7 @@ namespace ModelBox
             {
                 _debugSceneCaptureHandle?.Release();
                 _debugSceneCaptureHandle = RTHandles.Alloc(width, height,
-                    colorFormat: GraphicsFormat.R8G8B8A8_SRGB,
+                    colorFormat: captureFormat,
                     filterMode: FilterMode.Bilinear,
                     name: "_ModelBoxDebugSceneCapture");
             }

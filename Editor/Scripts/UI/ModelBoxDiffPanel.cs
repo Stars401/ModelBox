@@ -8,6 +8,7 @@ namespace ModelBox
     /// <summary>
     /// 材质参数沙盒。自动读取选中物体材质，创建临时副本用于实时对比调试。
     /// 支持：实时预览编辑效果、重置、应用到原始、丢弃。临时材质在丢弃/窗口关闭时清理。
+    /// [fix v0.4] 修复材质替换失败：添加 SceneView 重绘、TogglePreview 从 _savedOriginals 克隆、LODGroup 多 Renderer 支持。
     /// </summary>
     public class MaterialDiffPanel
     {
@@ -19,7 +20,18 @@ namespace ModelBox
             {
                 AssemblyReloadEvents.beforeAssemblyReload += () =>
                 {
-                    // 域重载前确保 Renderer 材质恢复
+                    // [fix v0.4] 域重载前确保所有 Renderer 材质恢复（含 LODGroup 各级别）
+                    for (int i = 0; i < _sandboxAllRenderers?.Count; i++)
+                    {
+                        var rend = _sandboxAllRenderers[i];
+                        var originals = i < _sandboxAllSavedOriginals.Count ? _sandboxAllSavedOriginals[i] : null;
+                        if (rend != null && originals != null)
+                        {
+                            try { rend.sharedMaterials = originals; }
+                            catch { }
+                        }
+                    }
+                    // 回退：如果多 Renderer 列表为空，尝试单 Renderer 恢复
                     if (_sandboxActiveRenderer != null && _sandboxSavedOriginals != null)
                     {
                         try { _sandboxActiveRenderer.sharedMaterials = _sandboxSavedOriginals; }
@@ -30,6 +42,8 @@ namespace ModelBox
                     _sandboxActiveRenderer = null;
                     _sandboxActiveMaterial = null;
                     _sandboxSavedOriginals = null;
+                    _sandboxAllRenderers = null;
+                    _sandboxAllSavedOriginals = null;
                 };
             }
         }
@@ -38,14 +52,20 @@ namespace ModelBox
         private static Renderer _sandboxActiveRenderer;
         private static Material _sandboxActiveMaterial;
         private static Material[] _sandboxSavedOriginals;
+        // [fix v0.4] 多 Renderer 静态镜像
+        private static List<Renderer> _sandboxAllRenderers;
+        private static List<Material[]> _sandboxAllSavedOriginals;
         // ---- 状态 ----
         private Renderer _targetRenderer;
+        // [fix v0.4] LODGroup 多 Renderer 支持：沙盒需要替换所有 LOD 级别的对应材质槽
+        private List<Renderer> _allTargetRenderers = new List<Renderer>();
+        private List<Material[]> _allSavedOriginals = new List<Material[]>();
         private Material _originalMaterial; // 启动沙盒时快照的原始材质引用
         private string _originalMatName;    // 原始材质名称（防御性备份）
         private string _originalShaderName; // 原始 Shader 名称
         private Shader _originalShader;     // 启动时的 Shader 引用（用于检测 Shader 变更）
         private Material _sandboxMaterial;  // 临时副本（HideAndDontSave）
-        private Material[] _savedOriginals; // 保存的原始 sharedMaterials 数组
+        private Material[] _savedOriginals; // 保存的原始 sharedMaterials 数组（主 Renderer）
         private int _activeSlotIndex = 0;   // 当前编辑的材质槽索引
         private bool _isPreviewing;
 
@@ -587,21 +607,62 @@ namespace ModelBox
             _originalShader = original.shader;
             _activeSlotIndex = slotIndex;
 
-            // 保存 Renderer 原始材质数组并替换选中槽位
-            if (_targetRenderer != null)
+            // [fix v0.4] 收集所有需要替换的 Renderer（主 Renderer + LODGroup 各级别 Renderer）
+            _allTargetRenderers.Clear();
+            _allSavedOriginals.Clear();
+            CollectAllRenderers(_targetRenderer, _allTargetRenderers);
+
+            // 保存每个 Renderer 的原始材质数组并替换选中槽位
+            foreach (var rend in _allTargetRenderers)
             {
-                _savedOriginals = _targetRenderer.sharedMaterials;
-                var mats = (Material[])_savedOriginals.Clone();
-                if (slotIndex < mats.Length)
+                var originals = rend.sharedMaterials;
+                _allSavedOriginals.Add(originals);
+
+                if (slotIndex < originals.Length)
+                {
+                    var mats = (Material[])originals.Clone();
                     mats[slotIndex] = _sandboxMaterial;
-                _targetRenderer.sharedMaterials = mats;
-                _isPreviewing = true;
+                    rend.sharedMaterials = mats;
+                }
             }
+
+            // 主 Renderer 的引用（用于 UI 显示和静态镜像）
+            _savedOriginals = _targetRenderer.sharedMaterials;
+            _isPreviewing = true;
 
             // 同步静态镜像（域重载安全网）
             _sandboxActiveRenderer = _targetRenderer;
             _sandboxActiveMaterial = _sandboxMaterial;
-            _sandboxSavedOriginals = _savedOriginals;
+            _sandboxSavedOriginals = _allSavedOriginals.Count > 0 ? _allSavedOriginals[0] : null;
+            _sandboxAllRenderers = new List<Renderer>(_allTargetRenderers);
+            _sandboxAllSavedOriginals = new List<Material[]>(_allSavedOriginals);
+
+            // [fix v0.4] 启动后立即触发 SceneView 重绘，否则用户看不到材质替换效果
+            EditorApplication.delayCall += () => SceneView.RepaintAll();
+        }
+
+        /// <summary>
+        /// [fix v0.4] 收集主 Renderer 及 LODGroup 下所有 LOD 级别的 Renderer。
+        /// 确保沙盒预览在所有 LOD 级别上生效。
+        /// </summary>
+        private static void CollectAllRenderers(Renderer primary, List<Renderer> results)
+        {
+            if (primary == null) return;
+            results.Add(primary);
+
+            // 检查是否有 LODGroup（可能在同一物体或父级）
+            var lodGroup = primary.GetComponentInParent<LODGroup>();
+            if (lodGroup == null) return;
+
+            var lods = lodGroup.GetLODs();
+            foreach (var lod in lods)
+            {
+                foreach (var rend in lod.renderers)
+                {
+                    if (rend != null && !results.Contains(rend))
+                        results.Add(rend);
+                }
+            }
         }
 
         private void TogglePreview()
@@ -610,17 +671,34 @@ namespace ModelBox
 
             if (_isPreviewing)
             {
-                // 开启预览：将沙盒材质放入对应槽位
-                var mats = _targetRenderer.sharedMaterials;
-                if (_activeSlotIndex < mats.Length)
-                    mats[_activeSlotIndex] = _sandboxMaterial;
-                _targetRenderer.sharedMaterials = mats;
+                // [fix v0.4] 开启预览：从 _savedOriginals 克隆（而非 sharedMaterials），
+                // 避免 sharedMaterials getter 返回已替换的数组导致引用混乱
+                for (int i = 0; i < _allTargetRenderers.Count; i++)
+                {
+                    var rend = _allTargetRenderers[i];
+                    if (rend == null) continue;
+                    var originals = i < _allSavedOriginals.Count ? _allSavedOriginals[i] : null;
+                    if (originals == null) continue;
+
+                    var mats = (Material[])originals.Clone();
+                    if (_activeSlotIndex < mats.Length)
+                        mats[_activeSlotIndex] = _sandboxMaterial;
+                    rend.sharedMaterials = mats;
+                }
+                EditorApplication.delayCall += () => SceneView.RepaintAll();
             }
             else
             {
-                // 关闭预览：恢复原始材质数组
-                if (_savedOriginals != null)
-                    _targetRenderer.sharedMaterials = _savedOriginals;
+                // 关闭预览：恢复所有 Renderer 的原始材质数组
+                for (int i = 0; i < _allTargetRenderers.Count; i++)
+                {
+                    var rend = _allTargetRenderers[i];
+                    if (rend == null) continue;
+                    var originals = i < _allSavedOriginals.Count ? _allSavedOriginals[i] : null;
+                    if (originals != null)
+                        rend.sharedMaterials = originals;
+                }
+                EditorApplication.delayCall += () => SceneView.RepaintAll();
             }
         }
 
@@ -658,11 +736,17 @@ namespace ModelBox
         /// <summary>丢弃沙盒：恢复 Renderer、销毁临时材质、重置状态。</summary>
         public void DiscardSandbox()
         {
-            // 恢复 Renderer 原始材质
-            if (_targetRenderer != null && _savedOriginals != null)
+            // [fix v0.4] 恢复所有 Renderer 的原始材质（含 LODGroup 各级别）
+            for (int i = 0; i < _allTargetRenderers.Count; i++)
             {
-                try { _targetRenderer.sharedMaterials = _savedOriginals; }
-                catch { /* Renderer 可能已被销毁 */ }
+                var rend = _allTargetRenderers[i];
+                if (rend == null) continue;
+                var originals = i < _allSavedOriginals.Count ? _allSavedOriginals[i] : null;
+                if (originals != null)
+                {
+                    try { rend.sharedMaterials = originals; }
+                    catch { /* Renderer 可能已被销毁 */ }
+                }
             }
 
             // 销毁临时材质
@@ -673,8 +757,9 @@ namespace ModelBox
             }
 
             _savedOriginals = null;
+            _allTargetRenderers.Clear();
+            _allSavedOriginals.Clear();
             _isPreviewing = false;
-            // 保持 _searchFilter（用户可能想用相同搜索重新开始）
             _diffCount = 0;
             _totalCount = 0;
 
@@ -682,6 +767,8 @@ namespace ModelBox
             _sandboxActiveRenderer = null;
             _sandboxActiveMaterial = null;
             _sandboxSavedOriginals = null;
+
+            EditorApplication.delayCall += () => SceneView.RepaintAll();
         }
 
         public void Cleanup()

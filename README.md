@@ -1,6 +1,6 @@
 # modelBox — Unity URP 实时 Shader 调试可视化工具
 
-> **版本:** v0.3.2 | **作者:** Sky幻 | **Unity:** 2021.3+ | **管线:** URP 12.0+
+> **版本:** v0.4.0 | **作者:** Sky幻 | **Unity:** 2021.3+ | **管线:** URP 12.0+
 
 ## 概述
 
@@ -367,7 +367,18 @@ com.unity.modelbox/
 
 ## 版本历史
 
-### v0.3.2（当前）
+### v0.4.0（当前）
+- **沙盒修复**：材质替换失败根因修复（SceneView 重绘缺失 + TogglePreview 引用混乱 + LODGroup 多 Renderer 遗漏）
+- **PixelBar 拾取修复**：Renderer 查找优先同级而非深度优先、多 Renderer mesh raycast 取最近命中
+- **PixelBar 参数修复**：LocalPosition 使用 Renderer transform、GPU-only 模式标记 N/A、NdotL/NdotV/Fresnel CPU 端计算
+- **VR/XR 兼容性**：立体渲染相机自动跳过全屏 Blit 模式
+- **Layer 冲突处理**：SEL 模式自动查找空闲 Layer（28-31）
+- **HDR 兼容性**：捕获 RT 根据相机 HDR 设置选择格式
+- **多 Renderer 支持**：一键安装到所有 URP Renderer Data
+- **选区调试状态持久化**：域重载恢复选区调试模式和网格叠加标志
+- **代码质量**：Shader 颜色映射去重（3 shader → include hlsl）、PixelInspector 事件泄漏修复、Undo 下溢保护
+
+### v0.3.2
 - 骨骼权重可视化：顶点颜色热力图模式 + 顶点过滤模式（可调阈值）
 - Mesh 信息独立侧边栏页面
 - 场景调试控制补全：SEL/分屏/冻结在检查页也可用

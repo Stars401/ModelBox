@@ -22,6 +22,7 @@ Shader "Hidden/ModelBox/ShadowMapBlit"
             #pragma multi_compile_instancing
 
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include "ModelBoxColorMapping.hlsl"
             // 注意：不直接 include Shadows.hlsl（依赖 EntityLighting.hlsl 中的 LerpWhiteTo，
             // 且我们未使用其中的函数）。阴影全局属性手动声明。
 
@@ -68,45 +69,7 @@ Shader "Hidden/ModelBox/ShadowMapBlit"
                 return output;
             }
 
-            // ---- 颜色映射函数（与 ScreenNormalBlit 一致） ----
-
-            half3 HeatMap(float t)
-            {
-                half3 c = half3(0, 0, 0);
-                c.r = smoothstep(0.5, 0.8, t);
-                c.g = t < 0.5 ? smoothstep(0.0, 0.5, t) : smoothstep(1.0, 0.5, t);
-                c.b = smoothstep(0.0, 0.3, t) * (1.0 - smoothstep(0.3, 0.6, t));
-                return c;
-            }
-
-            half3 Rainbow(float t)
-            {
-                half3 c;
-                c.r = smoothstep(0.0, 0.25, t) * (1.0 - smoothstep(0.75, 1.0, t));
-                c.g = smoothstep(0.0, 0.5, t) * (1.0 - smoothstep(0.5, 1.0, t));
-                c.b = smoothstep(0.25, 0.75, t) * (1.0 - smoothstep(0.75, 1.0, t));
-                return saturate(c);
-            }
-
-            half3 ApplyColorMap(half3 input, int mode)
-            {
-                if (mode == 1) // Gray
-                {
-                    float g = dot(input, half3(0.299, 0.587, 0.114));
-                    return half3(g, g, g);
-                }
-                else if (mode == 2) // HeatMap
-                {
-                    float v = dot(input, half3(0.299, 0.587, 0.114));
-                    return HeatMap(saturate(v));
-                }
-                else if (mode == 3) // Rainbow
-                {
-                    float v = dot(input, half3(0.299, 0.587, 0.114));
-                    return Rainbow(saturate(v));
-                }
-                return input;
-            }
+            // [fix v0.4] 颜色映射函数已提取到 ModelBoxColorMapping.hlsl，此处不再重复
 
             // ---- 级联索引计算 ----
             // URP 源码：_CascadeShadowSplitSpheresN.w = 线性半径，_CascadeShadowSplitSphereRadii = 平方半径

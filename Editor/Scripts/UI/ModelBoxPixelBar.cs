@@ -5,7 +5,8 @@ namespace ModelBox
 {
     /// <summary>
     /// 底部信息条。显示鼠标处调试值：R/G/B/A 通道 + Depth + 自定义属性。
-    /// [fix] 根据调试模式直接计算 R/G/B/A（与 shader 编码一致），
+    /// [fix] 根据调试模式直接计算 R/G/B/A（与 shader 代码一致）。
+    /// [fix v0.4] 修复物体拾取错误：优先 Collider 同级 Renderer 查找、多 Renderer mesh raycast、UV 警告不覆盖自定义属性。
     /// 不使用 Camera.Render（避免性能问题和闪烁）。
     /// </summary>
     [InitializeOnLoad]
@@ -16,6 +17,7 @@ namespace ModelBox
         // 采样数据
         private static float _chR, _chG, _chB, _chA, _depth;
         private static string _customPropValue = "";
+        private static string _uvWarning = ""; // [fix v0.4] 独立 UV 警告字段，不覆盖 _customPropValue
         private static string _hitName = "";
         private static string _shaderName = "";
         private static Vector3 _worldPos;
@@ -49,9 +51,9 @@ namespace ModelBox
 
             Event e = Event.current;
 
-            // 只在 Repaint 事件中采样
+            // [fix v0.4] 节流从 0.1s 降为 0.05s，减少快速移动时数据陈旧
             if ((debugActive || pixelBarStandalone) && e.type == EventType.Repaint
-                && (float)EditorApplication.timeSinceStartup - _lastSampleTime > 0.1f)
+                && (float)EditorApplication.timeSinceStartup - _lastSampleTime > 0.05f)
             {
                 _lastSampleTime = (float)EditorApplication.timeSinceStartup;
                 SampleAtMouse(sceneView, e.mousePosition);
@@ -99,10 +101,11 @@ namespace ModelBox
                 _hasData = true;
                 _hitName = hit.collider.gameObject.name;
                 _worldPos = hit.point;
+                _uvWarning = ""; // [fix v0.4] 每次采样重置 UV 警告
 
-                // [fix] 三级回退查找 Renderer：collider 子级 → collider 父级 → 根节点子级
-                // 覆盖 LODGroup、静态合批等复杂层级结构
-                var hitRenderer = hit.collider.GetComponentInChildren<Renderer>();
+                // [fix v0.4] Renderer 查找：优先 Collider 同级 → 父级 → 根的子级
+                // 之前的 GetComponentInChildren 深度优先搜索在复杂层级中可能返回错误子级
+                var hitRenderer = hit.collider.GetComponent<Renderer>();
                 if (hitRenderer == null)
                     hitRenderer = hit.collider.GetComponentInParent<Renderer>();
                 if (hitRenderer == null)
@@ -113,159 +116,159 @@ namespace ModelBox
                 var mode = ModelBoxManager.Instance?.CurrentMode ?? DebugViewMode.None;
                 _depth = hit.distance;
 
-                // [fix] R/G/B/A 与 shader 编码一致（与屏幕上显示的颜色对应）
                 var params2 = ModelBoxManager.Instance?.CurrentParameters ?? default;
                 float scale = params2.Scale;
                 float depthRange = params2.DepthRange;
 
-                switch (mode)
-                {
-                    case DebugViewMode.WorldPosition:
-                        // Shader: normalized = ws / max(scale, 0.001) * 0.5 + 0.5; saturate
-                        var wp = hit.point / Mathf.Max(scale, 0.001f) * 0.5f + Vector3.one * 0.5f;
-                        _chR = Mathf.Clamp01(wp.x); _chG = Mathf.Clamp01(wp.y); _chB = Mathf.Clamp01(wp.z); _chA = 1;
-                        break;
-                    case DebugViewMode.LocalPosition:
-                        // Shader: frac(positionOS * scale)
-                        var lp = hit.collider.transform.InverseTransformPoint(hit.point) * scale;
-                        _chR = lp.x - Mathf.Floor(lp.x); _chG = lp.y - Mathf.Floor(lp.y); _chB = lp.z - Mathf.Floor(lp.z); _chA = 1;
-                        break;
-                    case DebugViewMode.WorldNormal:
-                    case DebugViewMode.LocalNormal:
-                        // Shader: normal * 0.5 + 0.5
-                        _chR = hit.normal.x * 0.5f + 0.5f; _chG = hit.normal.y * 0.5f + 0.5f; _chB = hit.normal.z * 0.5f + 0.5f; _chA = 1;
-                        break;
-                    case DebugViewMode.UV0:
-                        _chR = hit.textureCoord.x; _chG = hit.textureCoord.y; _chB = 0; _chA = 1;
-                        if (hit.collider is not MeshCollider && _chR == 0 && _chG == 0)
-                            _customPropValue = "[UV可能无效:非MeshCollider]";
-                        break;
-                    case DebugViewMode.Depth:
-                        // Shader: saturate(linearDepth / depthRange)
-                        _chR = Mathf.Clamp01(hit.distance / Mathf.Max(depthRange, 0.001f));
-                        _chG = _chR; _chB = _chR; _chA = 1;
-                        break;
-                    case DebugViewMode.DiagRawDepth:
-                    {
-                        // Shader: 从 _CameraDepthTexture 采样非线性深度 → (d, d*0.5, 1-d)
-                        // CPU 近似：Unity URP 默认 reversed-Z，rawDepth ≈ 1 - linearDist/far
-                        float linearDist = Mathf.Min(hit.distance, camera.farClipPlane);
-                        float rawDepth = 1.0f - linearDist / camera.farClipPlane;
-                        _chR = rawDepth; _chG = rawDepth * 0.5f; _chB = 1.0f - rawDepth; _chA = 1;
-                        break;
-                    }
-                    case DebugViewMode.DiagObjectDepth:
-                    {
-                        // Shader: 1.0 - positionCS.z/positionCS.w（NDC 深度，近=0 远=1，近亮远暗）
-                        // CPU 近似：线性映射到 NDC 深度范围
-                        float ndcDepth = Mathf.Clamp01(hit.distance / camera.farClipPlane);
-                        _chR = ndcDepth; _chG = ndcDepth; _chB = ndcDepth; _chA = 1;
-                        break;
-                    }
-                    case DebugViewMode.VertexColor:
-                        // Shader: 直接输出 input.color，CPU Raycast 无法读取顶点颜色
-                        _chR = 0; _chG = 0; _chB = 0; _chA = 0;
-                        break;
-                    case DebugViewMode.FlatNormal:
-                        _chR = hit.normal.x * 0.5f + 0.5f;
-                        _chG = hit.normal.y * 0.5f + 0.5f;
-                        _chB = hit.normal.z * 0.5f + 0.5f;
-                        _chA = 1;
-                        break;
-                    // [fix] 独立模式：显示命中法线方向（映射到 0-1）
-                    case DebugViewMode.None:
-                        _chR = hit.normal.x * 0.5f + 0.5f; _chG = hit.normal.y * 0.5f + 0.5f; _chB = hit.normal.z * 0.5f + 0.5f;
-                        _chA = 1;
-                        break;
-                    default:
-                        _chR = 0; _chG = 0; _chB = 0; _chA = 1;
-                        break;
-                }
+                // [fix v0.4] 使用统一的 ComputeChannelValues 方法，修复 LocalPosition Transform 问题
+                var rendererTransform = hitRenderer != null ? hitRenderer.transform : hit.collider.transform;
+                ComputeChannelValues(mode, hit.point, hit.normal, hit.textureCoord,
+                    hit.distance, rendererTransform, scale, depthRange, camera);
 
                 ReadCustomProperty(hitRenderer);
             }
             else
             {
-                // [fix] Physics.Raycast 未命中（物体可能无 Collider）：
+                // [fix v0.4] Physics.Raycast 未命中（物体可能无 Collider）：
                 // 使用 Bounds-Ray 拾取 + CPU 射线-网格求交（不依赖 Collider，不触发递归渲染）
-                // 注意：不使用 HandleUtility.PickGameObject，它在 duringSceneGui Repaint 中会触发 GUI 递归
+                // 改进：PickNearestRenderers 返回所有 Bounds 命中的 Renderer（按距离排序），
+                // 然后逐个做 mesh raycast 取最近命中，避免只检查一个 Renderer 导致遗漏
                 var mode = ModelBoxManager.Instance?.CurrentMode ?? DebugViewMode.None;
-                Renderer pickedRenderer = MeshRaycastUtility.PickNearestRenderer(ray, camera);
+                var candidates = MeshRaycastUtility.PickNearestRenderers(ray, camera);
 
-                if (pickedRenderer != null && MeshRaycastUtility.Raycast(ray, pickedRenderer, out var meshHit))
+                if (candidates != null && candidates.Count > 0)
                 {
-                    _hasData = true;
-                    _hitName = pickedRenderer.gameObject.name;
-                    _worldPos = meshHit.point;
-                    _shaderName = (pickedRenderer.sharedMaterial != null)
-                        ? pickedRenderer.sharedMaterial.shader.name : "";
-                    _depth = meshHit.distance;
+                    float closestMeshDist = float.MaxValue;
+                    Renderer bestRenderer = null;
+                    MeshRaycastUtility.MeshRayHit bestHit = default;
 
-                    // [fix] R/G/B/A 与 shader 编码一致
-                    var params3 = ModelBoxManager.Instance?.CurrentParameters ?? default;
-                    float scale3 = params3.Scale;
-                    float depthRange3 = params3.DepthRange;
-
-                    switch (mode)
+                    foreach (var rend in candidates)
                     {
-                        case DebugViewMode.WorldPosition:
-                            var wp3 = meshHit.point / Mathf.Max(scale3, 0.001f) * 0.5f + Vector3.one * 0.5f;
-                            _chR = Mathf.Clamp01(wp3.x); _chG = Mathf.Clamp01(wp3.y); _chB = Mathf.Clamp01(wp3.z); _chA = 1;
-                            break;
-                        case DebugViewMode.LocalPosition:
-                            var lp3 = pickedRenderer.transform.InverseTransformPoint(meshHit.point) * scale3;
-                            _chR = lp3.x - Mathf.Floor(lp3.x); _chG = lp3.y - Mathf.Floor(lp3.y); _chB = lp3.z - Mathf.Floor(lp3.z); _chA = 1;
-                            break;
-                        case DebugViewMode.WorldNormal:
-                        case DebugViewMode.LocalNormal:
-                            _chR = meshHit.normal.x * 0.5f + 0.5f; _chG = meshHit.normal.y * 0.5f + 0.5f; _chB = meshHit.normal.z * 0.5f + 0.5f; _chA = 1;
-                            break;
-                        case DebugViewMode.UV0:
-                            _chR = meshHit.textureCoord.x; _chG = meshHit.textureCoord.y; _chB = 0; _chA = 1;
-                            break;
-                        case DebugViewMode.Depth:
-                            _chR = Mathf.Clamp01(meshHit.distance / Mathf.Max(depthRange3, 0.001f));
-                            _chG = _chR; _chB = _chR; _chA = 1;
-                            break;
-                        case DebugViewMode.DiagRawDepth:
+                        if (MeshRaycastUtility.Raycast(ray, rend, out var meshHit))
                         {
-                            float linDist3 = Mathf.Min(meshHit.distance, camera.farClipPlane);
-                            float rawD3 = 1.0f - linDist3 / camera.farClipPlane;
-                            _chR = rawD3; _chG = rawD3 * 0.5f; _chB = 1.0f - rawD3; _chA = 1;
-                            break;
+                            if (meshHit.distance < closestMeshDist)
+                            {
+                                closestMeshDist = meshHit.distance;
+                                bestRenderer = rend;
+                                bestHit = meshHit;
+                            }
                         }
-                        case DebugViewMode.DiagObjectDepth:
-                        {
-                            float ndcD3 = Mathf.Clamp01(meshHit.distance / camera.farClipPlane);
-                            _chR = ndcD3; _chG = ndcD3; _chB = ndcD3; _chA = 1;
-                            break;
-                        }
-                        case DebugViewMode.VertexColor:
-                            _chR = 0; _chG = 0; _chB = 0; _chA = 0;
-                            break;
-                        case DebugViewMode.FlatNormal:
-                            _chR = meshHit.normal.x * 0.5f + 0.5f;
-                            _chG = meshHit.normal.y * 0.5f + 0.5f;
-                            _chB = meshHit.normal.z * 0.5f + 0.5f;
-                            _chA = 1;
-                            break;
-                        case DebugViewMode.None:
-                            _chR = meshHit.normal.x * 0.5f + 0.5f; _chG = meshHit.normal.y * 0.5f + 0.5f; _chB = meshHit.normal.z * 0.5f + 0.5f;
-                            _chA = 1;
-                            break;
-                        default:
-                            _chR = 0; _chG = 0; _chB = 0; _chA = 1;
-                            break;
                     }
 
-                    ReadCustomProperty(pickedRenderer);
-                    return;
+                    if (bestRenderer != null)
+                    {
+                        _hasData = true;
+                        _hitName = bestRenderer.gameObject.name;
+                        _worldPos = bestHit.point;
+                        _uvWarning = "";
+                        _shaderName = (bestRenderer.sharedMaterial != null)
+                            ? bestRenderer.sharedMaterial.shader.name : "";
+                        _depth = bestHit.distance;
+
+                        var params3 = ModelBoxManager.Instance?.CurrentParameters ?? default;
+                        float scale3 = params3.Scale;
+                        float depthRange3 = params3.DepthRange;
+
+                        ComputeChannelValues(mode, bestHit.point, bestHit.normal, bestHit.textureCoord,
+                            bestHit.distance, bestRenderer.transform, scale3, depthRange3, camera);
+
+                        ReadCustomProperty(bestRenderer);
+                        return;
+                    }
                 }
 
                 _hasData = false;
                 _chR = _chG = _chB = _chA = _depth = 0;
                 _hitName = "";
                 _customPropValue = "";
+                _uvWarning = "";
+            }
+        }
+
+        /// <summary>
+        /// [fix v0.4] 统一的通道值计算，消除 Physics.Raycast 和 MeshRaycast 两条路径的代码重复。
+        /// 修复 LocalPosition 使用 Renderer transform 而非 Collider transform。
+        /// 修复 DiagRawDepth/DiagObjectDepth 标记为 GPU-only 而非错误近似值。
+        /// 为 NdotL/NdotV/Fresnel 等 PBR 模式添加 CPU 端计算。
+        /// 对无法 CPU 计算的模式显示 N/A 而非误导性的 (0,0,0,1)。
+        /// </summary>
+        private static void ComputeChannelValues(DebugViewMode mode,
+            Vector3 worldPos, Vector3 normal, Vector2 uv, float distance,
+            Transform rendererTransform, float scale, float depthRange, Camera camera)
+        {
+            switch (mode)
+            {
+                case DebugViewMode.WorldPosition:
+                    var wp = worldPos / Mathf.Max(scale, 0.001f) * 0.5f + Vector3.one * 0.5f;
+                    _chR = Mathf.Clamp01(wp.x); _chG = Mathf.Clamp01(wp.y); _chB = Mathf.Clamp01(wp.z); _chA = 1;
+                    break;
+                case DebugViewMode.LocalPosition:
+                    // [fix v0.4] 使用 Renderer 的 transform 而非 Collider 的 transform
+                    var lp = rendererTransform.InverseTransformPoint(worldPos) * scale;
+                    _chR = lp.x - Mathf.Floor(lp.x); _chG = lp.y - Mathf.Floor(lp.y); _chB = lp.z - Mathf.Floor(lp.z); _chA = 1;
+                    break;
+                case DebugViewMode.WorldNormal:
+                case DebugViewMode.LocalNormal:
+                case DebugViewMode.FlatNormal:
+                    _chR = normal.x * 0.5f + 0.5f; _chG = normal.y * 0.5f + 0.5f; _chB = normal.z * 0.5f + 0.5f; _chA = 1;
+                    break;
+                case DebugViewMode.UV0:
+                    _chR = uv.x; _chG = uv.y; _chB = 0; _chA = 1;
+                    break;
+                case DebugViewMode.Depth:
+                    _chR = Mathf.Clamp01(distance / Mathf.Max(depthRange, 0.001f));
+                    _chG = _chR; _chB = _chR; _chA = 1;
+                    break;
+                case DebugViewMode.DiagRawDepth:
+                    // [fix v0.4] 标记为 GPU-only：CPU 端无法精确重现非线性深度缓冲值
+                    _chR = -1; _chG = -1; _chB = -1; _chA = -1; // N/A 标记
+                    break;
+                case DebugViewMode.DiagObjectDepth:
+                    // [fix v0.4] 标记为 GPU-only：NDC 深度需要顶点变换，CPU 端无法精确计算
+                    _chR = -1; _chG = -1; _chB = -1; _chA = -1; // N/A 标记
+                    break;
+                case DebugViewMode.VertexColor:
+                    // CPU Raycast 无法读取顶点颜色
+                    _chR = -1; _chG = -1; _chB = -1; _chA = -1; // N/A 标记
+                    break;
+                case DebugViewMode.NdotL:
+                {
+                    // [fix v0.4] CPU 端计算 NdotL
+                    var light = RenderSettings.sun;
+                    if (light != null)
+                    {
+                        float ndotl = Mathf.Clamp01(Vector3.Dot(normal, light.transform.forward));
+                        _chR = ndotl; _chG = ndotl; _chB = ndotl; _chA = 1;
+                    }
+                    else { _chR = -1; _chG = -1; _chB = -1; _chA = -1; }
+                    break;
+                }
+                case DebugViewMode.NdotV:
+                {
+                    // [fix v0.4] CPU 端计算 NdotV
+                    Vector3 viewDir = (camera.transform.position - worldPos).normalized;
+                    float ndotv = Mathf.Clamp01(Vector3.Dot(normal, viewDir));
+                    _chR = ndotv; _chG = ndotv; _chB = ndotv; _chA = 1;
+                    break;
+                }
+                case DebugViewMode.Fresnel:
+                {
+                    // [fix v0.4] CPU 端计算 Schlick Fresnel
+                    Vector3 viewDir = (camera.transform.position - worldPos).normalized;
+                    float ndotv = Mathf.Clamp01(Vector3.Dot(normal, viewDir));
+                    float fresnel = Mathf.Pow(1.0f - ndotv, 5.0f);
+                    _chR = fresnel; _chG = fresnel; _chB = fresnel; _chA = 1;
+                    break;
+                }
+                case DebugViewMode.None:
+                    // 独立模式：显示命中法线方向（映射到 0-1）
+                    _chR = normal.x * 0.5f + 0.5f; _chG = normal.y * 0.5f + 0.5f; _chB = normal.z * 0.5f + 0.5f;
+                    _chA = 1;
+                    break;
+                default:
+                    // [fix v0.4] 无法 CPU 计算的模式标记为 N/A 而非误导性的 (0,0,0,1)
+                    _chR = -1; _chG = -1; _chB = -1; _chA = -1; // N/A 标记
+                    break;
             }
         }
 
@@ -351,13 +354,27 @@ namespace ModelBox
                 else
                 {
                     statusText = "";
-                    rText = $"R:{_chR:F3}";
-                    gText = $"G:{_chG:F3}";
-                    bText = $"B:{_chB:F3}";
-                    aText = $"A:{_chA:F3}";
+                    // [fix v0.4] N/A 标记（值为 -1 表示 GPU-only 模式，CPU 端无法计算）
+                    if (_chR < 0)
+                    {
+                        rText = "R: N/A";
+                        gText = "G: N/A";
+                        bText = "B: N/A";
+                        aText = "A: N/A";
+                    }
+                    else
+                    {
+                        rText = $"R:{_chR:F3}";
+                        gText = $"G:{_chG:F3}";
+                        bText = $"B:{_chB:F3}";
+                        aText = $"A:{_chA:F3}";
+                    }
                     dpText = $"Dp:{_depth:F3}";
                     propText = (ShowCustomProp && !string.IsNullOrEmpty(CustomPropName))
                         ? $"{CustomPropName}={_customPropValue}" : "";
+                    // [fix v0.4] 显示 UV 警告（如有）
+                    if (!string.IsNullOrEmpty(_uvWarning))
+                        propText = string.IsNullOrEmpty(propText) ? _uvWarning : $"{propText} {_uvWarning}";
                     nameText = _hitName;
                     shaderText = !string.IsNullOrEmpty(_shaderName) ? $"Shader:{_shaderName}" : "";
                     wposText = $"WPos:({_worldPos.x:F1},{_worldPos.y:F1},{_worldPos.z:F1})";

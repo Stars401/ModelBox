@@ -31,61 +31,70 @@ namespace ModelBox
 
         /// <summary>
         /// 一键添加 Feature 到当前 URP Renderer。
+        /// [fix v0.4] 同时安装到所有 Renderer Data（支持多 Renderer 项目）。
         /// </summary>
         public static bool AddFeatureToActiveRenderer()
         {
-            var rendererData = GetActiveRendererData();
-            if (rendererData == null)
+            var allRendererDatas = GetAllRendererDatas();
+            if (allRendererDatas.Count == 0)
             {
-                Debug.LogWarning("[ModelBox] 无法获取 URP Renderer Data。请确认项目使用 URP。");
-                return false;
+                var rendererData = GetActiveRendererData();
+                if (rendererData == null)
+                {
+                    Debug.LogWarning("[ModelBox] 无法获取 URP Renderer Data。请确认项目使用 URP。");
+                    return false;
+                }
+                allRendererDatas.Add(rendererData);
             }
 
-            if (IsSetupComplete())
+            bool anyAdded = false;
+            foreach (var rendererData in allRendererDatas)
             {
-                Debug.Log("[ModelBox] Feature 已存在，无需重复安装。");
+                bool alreadyInstalled = rendererData.rendererFeatures
+                    .Any(f => f != null && f.GetType() == typeof(ModelBoxRendererFeature));
+                if (alreadyInstalled) continue;
+
+                var feature = ScriptableObject.CreateInstance<ModelBoxRendererFeature>();
+                feature.name = FeatureName;
+                feature.hideFlags = HideFlags.HideInInspector;
+
+                string rendererDataPath = AssetDatabase.GetAssetPath(rendererData);
+                if (!string.IsNullOrEmpty(rendererDataPath))
+                    AssetDatabase.AddObjectToAsset(feature, rendererDataPath);
+
+                var so = new SerializedObject(rendererData);
+                var featuresProp = so.FindProperty("m_RendererFeatures");
+
+                if (featuresProp == null)
+                {
+                    Debug.LogError($"[ModelBox] 无法访问 {rendererData.name} 的 m_RendererFeatures 属性。");
+                    Object.DestroyImmediate(feature, true);
+                    continue;
+                }
+
+                featuresProp.arraySize++;
+                var element = featuresProp.GetArrayElementAtIndex(featuresProp.arraySize - 1);
+                element.objectReferenceValue = feature;
+                so.ApplyModifiedProperties();
+                EditorUtility.SetDirty(rendererData);
+                anyAdded = true;
+                Debug.Log($"[ModelBox] Feature 已添加到 Renderer: {rendererData.name}");
+            }
+
+            if (!anyAdded)
+            {
+                Debug.Log("[ModelBox] Feature 已存在于所有 Renderer，无需重复安装。");
                 return true;
             }
 
-            var feature = ScriptableObject.CreateInstance<ModelBoxRendererFeature>();
-            feature.name = FeatureName;
-            feature.hideFlags = HideFlags.HideInInspector;
-
-            // RUNTIME-2: 持久化为 RendererData 的 sub-asset
-            string rendererDataPath = AssetDatabase.GetAssetPath(rendererData);
-            if (!string.IsNullOrEmpty(rendererDataPath))
-            {
-                AssetDatabase.AddObjectToAsset(feature, rendererDataPath);
-            }
-
-            var so = new SerializedObject(rendererData);
-            var featuresProp = so.FindProperty("m_RendererFeatures");
-
-            if (featuresProp == null)
-            {
-                Debug.LogError("[ModelBox] 无法访问 m_RendererFeatures 属性。");
-                Object.DestroyImmediate(feature, true);
-                return false;
-            }
-
-            featuresProp.arraySize++;
-            var element = featuresProp.GetArrayElementAtIndex(featuresProp.arraySize - 1);
-            element.objectReferenceValue = feature;
-            so.ApplyModifiedProperties();
-
-            EditorUtility.SetDirty(rendererData);
-
-            // BUG-1: 延迟保存，避免立即触发域重载导致 Graph WakeUp NullReferenceException
             EditorApplication.delayCall += () =>
             {
                 AssetDatabase.SaveAssets();
                 Debug.Log("[ModelBox] Feature 安装完成，资产已保存。");
             };
 
-            // 确保深度纹理已启用
             EnsureDepthTexture();
-
-            Debug.Log("[ModelBox] 安装成功！ModelBoxRendererFeature 已添加到 URP Renderer。");
+            Debug.Log("[ModelBox] 安装成功！ModelBoxRendererFeature 已添加到所有 URP Renderer。");
             return true;
         }
 
@@ -163,7 +172,7 @@ namespace ModelBox
         }
 
         /// <summary>
-        /// 获取当前激活 URP Renderer 的 ScriptableRendererData。
+        /// 获取当前活跃 URP Renderer 的 ScriptableRendererData。
         /// </summary>
         private static ScriptableRendererData GetActiveRendererData()
         {
@@ -181,6 +190,31 @@ namespace ModelBox
 
             return dataListProp.GetArrayElementAtIndex(defaultIndex)
                 .objectReferenceValue as ScriptableRendererData;
+        }
+
+        /// <summary>
+        /// [fix v0.4] 获取所有 URP Renderer Data（支持多 Renderer 项目）。
+        /// 某些项目使用多个 Renderer（如主相机和 UI 各用一个），需要全部安装 Feature。
+        /// </summary>
+        private static List<ScriptableRendererData> GetAllRendererDatas()
+        {
+            var results = new List<ScriptableRendererData>();
+            var urpAsset = GraphicsSettings.currentRenderPipeline as UniversalRenderPipelineAsset;
+            if (urpAsset == null) return results;
+
+            var so = new SerializedObject(urpAsset);
+            var dataListProp = so.FindProperty("m_RendererDataList");
+            if (dataListProp == null) return results;
+
+            for (int i = 0; i < dataListProp.arraySize; i++)
+            {
+                var data = dataListProp.GetArrayElementAtIndex(i)
+                    .objectReferenceValue as ScriptableRendererData;
+                if (data != null)
+                    results.Add(data);
+            }
+
+            return results;
         }
     }
 }

@@ -125,6 +125,39 @@ namespace ModelBox
         /// <summary>
         /// 手动拾取射线方向上最近的 Mesh/SkinnedMesh Renderer（基于 Bounds 相交测试）。
         /// 替代 HandleUtility.PickGameObject，避免在 duringSceneGui Repaint 中触发递归渲染。
+        /// [fix v0.4] 新增：返回所有 Bounds 命中的 Renderer 列表（按距离排序），供调用方逐个 mesh raycast。
+        /// </summary>
+        public static List<Renderer> PickNearestRenderers(Ray worldRay, Camera camera)
+        {
+            float maxDist = camera != null ? camera.farClipPlane : 5000f;
+            var results = new List<(Renderer rend, float dist)>();
+
+            foreach (var mr in UnityEngine.Object.FindObjectsByType<MeshRenderer>(
+                         FindObjectsSortMode.None))
+            {
+                if (!mr.enabled || mr.gameObject.hideFlags != HideFlags.None) continue;
+                if (!RayIntersectsBounds(worldRay, mr.bounds, out float dist)) continue;
+                if (dist > maxDist) continue;
+                results.Add((mr, dist));
+            }
+
+            foreach (var smr in UnityEngine.Object.FindObjectsByType<SkinnedMeshRenderer>(
+                         FindObjectsSortMode.None))
+            {
+                if (!smr.enabled || smr.gameObject.hideFlags != HideFlags.None) continue;
+                if (!RayIntersectsBounds(worldRay, smr.bounds, out float dist)) continue;
+                if (dist > maxDist) continue;
+                results.Add((smr, dist));
+            }
+
+            // 按距离排序（最近在前）
+            results.Sort((a, b) => a.dist.CompareTo(b.dist));
+            return results.Select(r => r.rend).ToList();
+        }
+
+        /// <summary>
+        /// 手动拾取射线方向上最近的 Mesh/SkinnedMesh Renderer（基于 Bounds 相交测试）。
+        /// 替代 HandleUtility.PickGameObject，避免在 duringSceneGui Repaint 中触发递归渲染。
         /// </summary>
         public static Renderer PickNearestRenderer(Ray worldRay, Camera camera)
         {

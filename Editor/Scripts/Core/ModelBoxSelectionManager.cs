@@ -90,6 +90,33 @@ namespace ModelBox
             // [fix] 先取消旧订阅再注册（防御性编程，防止异常路径导致 handler 叠加）
             UnsubscribeEvents();
             SubscribeEvents();
+
+            // [fix v0.4] 恢复域重载前的选区调试状态
+            EditorApplication.delayCall += () =>
+            {
+                try
+                {
+                    var settings = ModelBoxSettings.GetOrCreate();
+                    if (settings != null)
+                    {
+                        // 恢复网格叠加标志（不需要材质替换，直接设置即可）
+                        if (settings.MeshOverlayState != MeshOverlayFlags.None)
+                            OverlayFlags = settings.MeshOverlayState;
+
+                        // 恢复选区调试模式（需要材质替换，通过 SetMode 触发）
+                        if (settings.LastSelectionMode != SelectionDebugMode.None)
+                        {
+                            var selected = Selection.activeTransform;
+                            if (selected != null && selected.GetComponentInChildren<Renderer>() != null)
+                                SetMode(settings.LastSelectionMode);
+                        }
+                    }
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogWarning($"[ModelBox] 恢复选区调试状态失败: {e}");
+                }
+            };
         }
 
         private void SubscribeEvents()
@@ -163,6 +190,9 @@ namespace ModelBox
             CurrentMode = mode;
             if (mode != SelectionDebugMode.None)
                 ApplyDebugMaterial(mode);
+            // [fix v0.4] 持久化选区调试模式到 Settings
+            var settings = ModelBoxSettings.GetOrCreate();
+            if (settings != null) { settings.LastSelectionMode = mode; settings.Save(); }
             // 使用 delayCall 避免 duringSceneGui 递归渲染
             EditorApplication.delayCall += () => SceneView.RepaintAll();
         }
@@ -170,6 +200,9 @@ namespace ModelBox
         public void SetOverlayFlags(MeshOverlayFlags flags)
         {
             OverlayFlags = flags;
+            // [fix v0.4] 持久化网格叠加状态到 Settings
+            var settings = ModelBoxSettings.GetOrCreate();
+            if (settings != null) { settings.MeshOverlayState = flags; settings.Save(); }
             EditorApplication.delayCall += () => SceneView.RepaintAll();
         }
 

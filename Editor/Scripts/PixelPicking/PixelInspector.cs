@@ -45,8 +45,9 @@ namespace ModelBox
 
         private static void OnBeforeAssemblyReload()
         {
-            // [fix H2] 取消事件订阅
+            // [fix v0.4] 取消所有事件订阅（包括自身），防止域重载后 handler 叠加泄漏
             SceneView.duringSceneGui -= OnSceneGUI;
+            AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
             MeshRaycastUtility.Cleanup();
 
             if (_pendingTempRT != null)

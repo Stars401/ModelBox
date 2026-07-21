@@ -72,8 +72,11 @@ namespace ModelBox
         private void OnUndoRedo()
         {
             // [fix C1] 代际计数器：仅当有待处理的 ModelBox Undo 时才恢复模式
+            // [fix v0.4] Q3-4: Undo/Redo 边界加固 — 防止下溢
             if (_pendingModelBoxUndo <= 0) return;
             _pendingModelBoxUndo--;
+            // [fix v0.4] 二次保护：确保计数器不会因异常变为负数
+            if (_pendingModelBoxUndo < 0) _pendingModelBoxUndo = 0;
 
             var manager = ModelBoxManager.Instance;
             if (manager != null && manager.CurrentMode != LastMode)

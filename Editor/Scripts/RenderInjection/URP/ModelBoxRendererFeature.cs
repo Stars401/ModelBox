@@ -199,6 +199,30 @@ namespace ModelBox
             if (manager == null || manager.CurrentMode == DebugViewMode.None)
                 return;
 
+            // [fix v0.4] VR/XR 兼容性：立体渲染相机跳过全屏 Blit 模式
+            // 全屏三角形 Blit 在 stereo rendering 下只覆盖单眼，会导致显示异常
+            // Geometry overrideMaterial 模式（DrawRenderers）不受影响，仍可使用
+            bool isStereo = renderingData.cameraData.camera.stereoEnabled;
+            bool needsScreenSpace = (manager.CurrentMode == DebugViewMode.Depth ||
+                                     manager.CurrentMode == DebugViewMode.ScreenNormal ||
+                                     manager.CurrentMode == DebugViewMode.RayMarch);
+            bool needsOpaqueTex = (manager.CurrentMode == DebugViewMode.OpaqueTexture);
+            bool needsOverdraw = (manager.CurrentMode == DebugViewMode.Overdraw);
+            bool needsShadowMap = (manager.CurrentMode == DebugViewMode.ShadowMap);
+            bool needsTransparency = (manager.CurrentMode == DebugViewMode.TransparencyLayers);
+
+            if (isStereo && (needsScreenSpace || needsOpaqueTex || needsOverdraw || needsShadowMap || needsTransparency || manager.SplitScreenEnabled))
+            {
+                // VR 模式下全屏 Blit 不可用，仅保留 Geometry overrideMaterial 模式
+                // 自动降级为仅 Geometry 模式
+                var geometryModes = !needsScreenSpace && !needsOpaqueTex && !needsOverdraw && !needsShadowMap && !needsTransparency;
+                if (!geometryModes)
+                {
+                    // 当前模式在 VR 下不可用，跳过本帧
+                    return;
+                }
+            }
+
             bool needsSplitScreen = manager.SplitScreenEnabled;
 
             // [fix] 分屏关闭时释放快照 RT，避免 GPU 内存泄漏
