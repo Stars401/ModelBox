@@ -269,7 +269,12 @@ namespace ModelBox
             }
 
             var material = manager.GetOriginalMaterial(renderer) ?? renderer.sharedMaterial;
-            var shader = material.shader;
+            var shader = material != null ? material.shader : null;
+            if (shader == null)
+            {
+                EditorGUILayout.HelpBox("材质 Shader 为空。", MessageType.Warning);
+                return;
+            }
 
             // 缓存失效检测
             if (shader != _cachedShader)

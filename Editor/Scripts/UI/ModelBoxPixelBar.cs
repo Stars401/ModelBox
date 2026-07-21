@@ -279,9 +279,11 @@ namespace ModelBox
             if (hitRenderer != null && hitRenderer.sharedMaterial != null)
             {
                 var mat = hitRenderer.sharedMaterial;
+                // [fix v0.4.1] shader 可能为 null（材质引用了已删除的 shader）
+                var shader = mat.shader;
+                if (shader == null) { _customPropValue = "[无Shader]"; return; }
                 if (mat.HasProperty(CustomPropName))
                 {
-                    var shader = mat.shader;
                     int propIdx = shader.FindPropertyIndex(CustomPropName);
                     if (propIdx >= 0)
                     {

@@ -21,14 +21,18 @@ namespace ModelBox
                 AssemblyReloadEvents.beforeAssemblyReload += () =>
                 {
                     // [fix v0.4] 域重载前确保所有 Renderer 材质恢复（含 LODGroup 各级别）
-                    for (int i = 0; i < _sandboxAllRenderers?.Count; i++)
+                    // [fix v0.4.1] 防御性 null 检查：_sandboxAllSavedOriginals 可能为 null
+                    if (_sandboxAllRenderers != null && _sandboxAllSavedOriginals != null)
                     {
-                        var rend = _sandboxAllRenderers[i];
-                        var originals = i < _sandboxAllSavedOriginals.Count ? _sandboxAllSavedOriginals[i] : null;
-                        if (rend != null && originals != null)
+                        for (int i = 0; i < _sandboxAllRenderers.Count; i++)
                         {
-                            try { rend.sharedMaterials = originals; }
-                            catch { }
+                            var rend = _sandboxAllRenderers[i];
+                            var originals = i < _sandboxAllSavedOriginals.Count ? _sandboxAllSavedOriginals[i] : null;
+                            if (rend != null && originals != null)
+                            {
+                                try { rend.sharedMaterials = originals; }
+                                catch { }
+                            }
                         }
                     }
                     // 回退：如果多 Renderer 列表为空，尝试单 Renderer 恢复
@@ -176,7 +180,17 @@ namespace ModelBox
             var pc = GUI.contentColor;
             GUI.contentColor = new Color(0.7f, 0.7f, 0.7f);
             string objName = _targetRenderer != null ? _targetRenderer.gameObject.name : "-";
-            int slotCount = _targetRenderer != null ? _targetRenderer.sharedMaterials.Length : 1;
+            // [fix v0.4.1] 防御性检查：Renderer 可能已销毁导致 sharedMaterials 抛异常
+            int slotCount = 1;
+            try
+            {
+                if (_targetRenderer != null)
+                {
+                    var sm = _targetRenderer.sharedMaterials;
+                    if (sm != null) slotCount = sm.Length;
+                }
+            }
+            catch { /* Renderer 可能已被销毁 */ }
             string slotInfo = slotCount > 1 ? $"  |  槽位 [{_activeSlotIndex}/{slotCount - 1}]" : "";
             EditorGUILayout.LabelField(
                 $"物体: {objName}{slotInfo}  |  材质: {_originalMatName}  |  Shader: {_originalShaderName}",
@@ -252,7 +266,9 @@ namespace ModelBox
                 MessageType.Info);
             EditorGUILayout.Space(4);
 
-            string matInfo = $"{material.name}  ({material.shader.name})";
+            // [fix v0.4.1] shader 可能为 null（材质引用了已删除的 shader）
+            string shaderDisplayName = material.shader != null ? material.shader.name : "(Missing Shader)";
+            string matInfo = $"{material.name}  ({shaderDisplayName})";
             EditorGUILayout.LabelField($"目标材质：{matInfo}", EditorStyles.miniLabel);
             EditorGUILayout.Space(4);
 
@@ -505,6 +521,9 @@ namespace ModelBox
         private void DrawKeywordToggles()
         {
             if (_sandboxMaterial == null) return;
+            // [fix v0.4.1] shader 可能为 null
+            var sandboxShader = _sandboxMaterial.shader;
+            if (sandboxShader == null) return;
 
             // 常见 URP keyword 及其控制的属性
             var keywordGroups = new (string keyword, string label, string tooltip)[]
@@ -525,7 +544,7 @@ namespace ModelBox
             foreach (var (keyword, label, tooltip) in keywordGroups)
             {
                 // 检查 shader 是否定义了此 keyword（没有定义的 keyword 按钮无意义）
-                var localKw = _sandboxMaterial.shader.keywordSpace.FindKeyword(keyword);
+                var localKw = sandboxShader.keywordSpace.FindKeyword(keyword);
                 if (!localKw.isValid)
                     continue;
 
@@ -717,6 +736,12 @@ namespace ModelBox
             Undo.RecordObject(_originalMaterial, "Material Sandbox Apply");
 
             var shader = _originalMaterial.shader;
+            // [fix v0.4.1] shader 可能为 null
+            if (shader == null)
+            {
+                Debug.LogWarning("[ModelBox] 无法应用到原始：材质 Shader 为空。");
+                return;
+            }
             int count = shader.GetPropertyCount();
             for (int i = 0; i < count; i++)
             {
@@ -809,6 +834,8 @@ namespace ModelBox
         private void CopyAllProperties(Material src, Material dst)
         {
             var shader = src.shader;
+            // [fix v0.4.1] shader 可能为 null
+            if (shader == null) return;
             int count = shader.GetPropertyCount();
             for (int i = 0; i < count; i++)
             {

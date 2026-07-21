@@ -76,6 +76,8 @@ namespace ModelBox
         public static void DrawWireframe(CachedMeshData data, Matrix4x4 localToWorld, Color color, Camera camera, Bounds worldBounds)
         {
             if (data == null || data.EdgeIndices == null || data.EdgeIndices.Length == 0) return;
+            // [fix v0.4.1] 顶点数组空检查
+            if (data.Vertices == null || data.Vertices.Length == 0) return;
 
             var verts = data.Vertices;
             var edges = data.EdgeIndices;
@@ -92,8 +94,11 @@ namespace ModelBox
 
             // 预变换顶点到世界空间（Handles.DrawLines 不使用 Handles.matrix）
             int maxVertIdx = 0;
+            int vertLimit = verts.Length; // [fix v0.4.1] 边界检查基准
             for (int i = 0; i < edges.Length; i += stride)
             {
+                // [fix v0.4.1] 防御性边界检查：边索引可能超出顶点数组范围（网格数据损坏/不完整）
+                if (edges[i] >= vertLimit || edges[i + 1] >= vertLimit) continue;
                 maxVertIdx = Mathf.Max(maxVertIdx, edges[i], edges[i + 1]);
             }
 
@@ -109,17 +114,27 @@ namespace ModelBox
             for (int i = 0; i < edges.Length; i += stride)
             {
                 int i0 = edges[i], i1 = edges[i + 1];
+                // [fix v0.4.1] 跳过越界边索引，防止 IndexOutOfRangeException
+                if (i0 >= vertLimit || i1 >= vertLimit) continue;
                 if (!_wireframeTransformedBuffer[i0]) { _wireframePointsBuffer[i0] = localToWorld.MultiplyPoint3x4(verts[i0]); _wireframeTransformedBuffer[i0] = true; }
                 if (!_wireframeTransformedBuffer[i1]) { _wireframePointsBuffer[i1] = localToWorld.MultiplyPoint3x4(verts[i1]); _wireframeTransformedBuffer[i1] = true; }
             }
 
             // 构建索引数组（LOD 筛选后的边索引，使用缓存缓冲）
-            // [fix] 精确匹配数组长度，防止 LOD 步进变化后残留旧索引导致幽灵线框
-            if (_wireframeEdgeBuffer == null || _wireframeEdgeBuffer.Length != edgeCount * 2)
-                _wireframeEdgeBuffer = new int[edgeCount * 2];
+            // [fix v0.4.1] 精确匹配数组长度，防止 LOD 步进变化后残留旧索引导致幽灵线框
+            // 同时跳过越界边索引
+            int validEdgeCount = 0;
+            for (int i = 0; i < edges.Length; i += stride)
+            {
+                if (edges[i] < vertLimit && edges[i + 1] < vertLimit) validEdgeCount++;
+            }
+            if (validEdgeCount == 0) return;
+            if (_wireframeEdgeBuffer == null || _wireframeEdgeBuffer.Length != validEdgeCount * 2)
+                _wireframeEdgeBuffer = new int[validEdgeCount * 2];
             int idx = 0;
             for (int i = 0; i < edges.Length; i += stride)
             {
+                if (edges[i] >= vertLimit || edges[i + 1] >= vertLimit) continue;
                 _wireframeEdgeBuffer[idx++] = edges[i];
                 _wireframeEdgeBuffer[idx++] = edges[i + 1];
             }
@@ -276,6 +291,8 @@ namespace ModelBox
         {
             if (data == null || data.Vertices == null || data.Vertices.Length == 0) return;
             if (vertexWeights == null || vertexWeights.Length != data.Vertices.Length) return;
+            // [fix v0.4.1] TriangleIndices 可能为 null（空网格或读取失败）
+            if (data.TriangleIndices == null || data.TriangleIndices.Length == 0) return;
 
             var mat = GetBoneWeightSurfaceMaterial(depthTest);
             if (mat == null) return;
@@ -493,6 +510,8 @@ namespace ModelBox
         public static CachedMeshData BakeSkinnedMesh(SkinnedMeshRenderer smr)
         {
             if (smr == null) return null;
+            // [fix v0.4.1] sharedMesh 可能为 null（SkinnedMeshRenderer 未配置网格）
+            if (smr.sharedMesh == null) return null;
 
             if (_bakeMesh == null)
                 _bakeMesh = new Mesh { name = "SkinnedBakeTemp" };

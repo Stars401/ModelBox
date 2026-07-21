@@ -583,16 +583,25 @@ namespace ModelBox
                 Handles.matrix = matrix;
                 var verts = data.Vertices;
                 var tris = data.TriangleIndices;
-                for (int i = 0; i < tris.Length; i += 3)
+                // [fix v0.4.1] 防御性检查：顶点/三角形数组可能为 null 或索引越界
+                if (verts != null && tris != null)
                 {
-                    Handles.DrawLine(verts[tris[i]], verts[tris[i + 1]]);
-                    Handles.DrawLine(verts[tris[i + 1]], verts[tris[i + 2]]);
-                    Handles.DrawLine(verts[tris[i + 2]], verts[tris[i]]);
+                    int vertLimit = verts.Length;
+                    for (int i = 0; i < tris.Length; i += 3)
+                    {
+                        // 跳过越界索引
+                        if (tris[i] >= vertLimit || tris[i + 1] >= vertLimit || tris[i + 2] >= vertLimit) continue;
+                        Handles.DrawLine(verts[tris[i]], verts[tris[i + 1]]);
+                        Handles.DrawLine(verts[tris[i + 1]], verts[tris[i + 2]]);
+                        Handles.DrawLine(verts[tris[i + 2]], verts[tris[i]]);
+                    }
                 }
             }
 
             if ((OverlayFlags & MeshOverlayFlags.Vertices) != 0)
             {
+                // [fix v0.4.1] 防御性 null 检查
+                if (data.Vertices == null) goto skipVertices;
                 Handles.color = VertexColor;
                 if (VertexScaleIndependent)
                 {
@@ -612,6 +621,7 @@ namespace ModelBox
                         Handles.SphereHandleCap(0, v, Quaternion.identity, capSize, EventType.Repaint);
                 }
             }
+            skipVertices:;
 
             if ((OverlayFlags & MeshOverlayFlags.Normals) != 0)
             {
@@ -619,7 +629,8 @@ namespace ModelBox
                 Handles.matrix = matrix;
                 var verts = data.Vertices;
                 var norms = data.Normals;
-                if (norms.Length == verts.Length)
+                // [fix v0.4.1] 防御性 null 检查：网格可能没有法线数据
+                if (verts != null && norms != null && norms.Length == verts.Length)
                 {
                     for (int i = 0; i < verts.Length; i++)
                     {

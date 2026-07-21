@@ -659,6 +659,10 @@ namespace ModelBox
             var settings = ModelBoxSettings.GetOrCreate();
             if (settings != null && !settings.ShowPerformanceHUD) return;
 
+            // [fix v0.4.1] currentDrawingSceneView 可能为 null（非 duringSceneGui 上下文调用时）
+            var sv = SceneView.currentDrawingSceneView;
+            if (sv == null) return;
+
             // [fix] FPS 计算：使用 EditorApplication.timeSinceStartup 替代 Time.unscaledDeltaTime
             // Time.unscaledDeltaTime 在 Editor/SceneView 中不可靠（游戏循环时钟，非编辑器刷新时钟）
             double now = EditorApplication.timeSinceStartup;
@@ -723,7 +727,7 @@ namespace ModelBox
             float hudWidth = Mathf.Max(size.x + 16, 360);
             float hudHeight = size.y + 6;
 
-            var viewRect = SceneView.currentDrawingSceneView.cameraViewport;
+            var viewRect = sv.cameraViewport;
 
             // [fix] 锚定在 PixelBar 上方（PixelBar 高 38px + 2px 底部偏移 = 40px）
             float pixelBarZone = 42f; // PixelBar 占用的底部空间 + 4px 间距
@@ -778,7 +782,10 @@ namespace ModelBox
             float hudHeight = size.y + 8;
 
             // [fix] 左下角定位，锚定在 Performance HUD 上方
-            var viewRect = SceneView.currentDrawingSceneView.cameraViewport;
+            // [fix v0.4.1] currentDrawingSceneView 可能为 null
+            var currentSv = SceneView.currentDrawingSceneView;
+            if (currentSv == null) return;
+            var viewRect = currentSv.cameraViewport;
             float anchorTop = _cachedPerfHudRect.height > 0
                 ? _cachedPerfHudRect.y      // Performance HUD 顶部
                 : viewRect.height - 42f;    // 无 Performance HUD 时的回退位置
