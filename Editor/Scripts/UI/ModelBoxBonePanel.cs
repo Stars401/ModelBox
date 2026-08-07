@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
@@ -6,7 +7,7 @@ namespace ModelBox
     /// <summary>
     /// 骨骼 / 蒙皮 信息面板。
     /// 从 ModelBoxSelectionInspector 提取，在左侧分类栏独立展示。
-    /// 功能：骨骼层级树、逐骨骼权重统计、Blend Shape 计数。
+    /// 功能：骨骼层级树、逐骨骼权重统计、Blend Shape 计数、权重可视化。
     /// </summary>
     public class ModelBoxBonePanel
     {
@@ -29,16 +30,214 @@ namespace ModelBox
         // [feat] 骨骼权重可视化
         private BoneWeightDisplayMode _displayMode = BoneWeightDisplayMode.Off;
         private float _weightThreshold = 0.1f;
-        private float[] _cachedVertexWeights; // 逐顶点权重缓存
+        private float _weightOpacity = 1.0f;
+        private float[] _cachedVertexWeights;
         private int _cachedWeightsBoneIndex = -1;
         private Mesh _cachedWeightsMesh;
-        private SkinnedMeshRenderer _cachedSourceSMR; // [fix] 权重来源 SMR 引用
-        // [fix H6] 跟踪上次状态，仅在变化时触发 RepaintAll
+        private SkinnedMeshRenderer _cachedSourceSMR;
         private BoneWeightDisplayMode _lastSyncedMode = BoneWeightDisplayMode.Off;
         private float _lastSyncedThreshold = -1f;
 
+        // [feat] 骨骼层级树
+        private struct BoneNode
+        {
+            public int Index;
+            public string Name;
+            public List<int> ChildIndices;
+            public bool HasParentInBones;
+        }
+
+        private BoneNode[] _boneNodes;
+        private List<int> _boneRootIndices;
+        private HashSet<int> _collapsedBones = new HashSet<int>();
+        private SkinnedMeshRenderer _cachedTreeSMR;
+        private bool _showBoneGizmos = true; // 默认开启，进入骨骼页即可看到骨骼
+
+        // [feat] 在 Draw() 首次调用时订阅 SceneView 点击选骨骼事件
+        private bool _subscribedBoneEvent;
+
+        // [fix] 清理事件订阅（由 ModelBoxWindow.OnDisable / AssemblyReload 调用）
+        public void Cleanup()
+        {
+            if (_subscribedBoneEvent)
+            {
+                ModelBoxSelectionManager.OnBoneSelectedInScene -= OnBoneSelectedInScene;
+                _subscribedBoneEvent = false;
+            }
+        }
+
+        private void EnsureSubscribed()
+        {
+            if (_subscribedBoneEvent) return;
+            ModelBoxSelectionManager.OnBoneSelectedInScene += OnBoneSelectedInScene;
+            _subscribedBoneEvent = true;
+        }
+
+        private void OnBoneSelectedInScene(int boneIndex)
+        {
+            _selectedBoneIndex = boneIndex;
+            // 强制重新计算权重统计
+            _cachedBoneIndex = -1;
+            // 强制重新计算权重可视化
+            _cachedWeightsBoneIndex = -1;
+            EditorApplication.delayCall += () => SceneView.RepaintAll();
+        }
+
+        /// <summary>
+        /// 构建骨骼层级树。通过 Transform.parent 关系判断父子层级。
+        /// </summary>
+        private void BuildBoneTree(SkinnedMeshRenderer smr)
+        {
+            var bones = smr.bones;
+            if (bones == null || bones.Length == 0)
+            {
+                _boneNodes = null;
+                _boneRootIndices = null;
+                return;
+            }
+
+            // 构建 Transform → boneIndex 映射
+            var boneMap = new Dictionary<Transform, int>();
+            for (int i = 0; i < bones.Length; i++)
+            {
+                if (bones[i] != null) boneMap[bones[i]] = i;
+            }
+
+            _boneNodes = new BoneNode[bones.Length];
+            _boneRootIndices = new List<int>();
+
+            // Pass 1: initialize all nodes first — struct array elements default to null ChildIndices
+            for (int i = 0; i < bones.Length; i++)
+            {
+                _boneNodes[i] = new BoneNode
+                {
+                    Index = i,
+                    Name = bones[i] != null ? bones[i].name : "(null)",
+                    ChildIndices = new List<int>(),
+                    HasParentInBones = false
+                };
+            }
+
+            // Pass 2: build parent-child relationships (all ChildIndices are now non-null)
+            for (int i = 0; i < bones.Length; i++)
+            {
+                if (bones[i] == null)
+                {
+                    _boneRootIndices.Add(i);
+                    continue;
+                }
+
+                var parent = bones[i].parent;
+                if (parent != null && boneMap.TryGetValue(parent, out int parentIdx))
+                {
+                    _boneNodes[i].HasParentInBones = true;
+                    _boneNodes[parentIdx].ChildIndices.Add(i);
+                }
+
+                if (!_boneNodes[i].HasParentInBones)
+                    _boneRootIndices.Add(i);
+            }
+        }
+
+        /// <summary>
+        /// 递归渲染骨骼层级树节点。
+        /// </summary>
+        private void DrawBoneNode(int index, int depth, bool hasFilter, string filterLower)
+        {
+            var node = _boneNodes[index];
+            var bone = _cachedSourceSMR.bones[index];
+
+            // 搜索过滤：如果当前骨骼不匹配，检查子骨骼是否有匹配的
+            bool nameMatches = !hasFilter || node.Name.ToLower().Contains(filterLower);
+            bool childMatches = false;
+            if (hasFilter)
+            {
+                foreach (var ci in node.ChildIndices)
+                {
+                    if (DoesSubtreeMatch(ci, filterLower))
+                    {
+                        childMatches = true;
+                        break;
+                    }
+                }
+            }
+
+            if (hasFilter && !nameMatches && !childMatches) return;
+
+            bool isCollapsed = _collapsedBones.Contains(index);
+            bool isSelected = (_selectedBoneIndex == index);
+
+            EditorGUILayout.BeginHorizontal();
+
+            // 缩进
+            GUILayout.Space(depth * 14);
+
+            // 展开/折叠按钮
+            if (node.ChildIndices.Count > 0 && !hasFilter)
+            {
+                var prevBG = GUI.backgroundColor;
+                if (GUILayout.Button(isCollapsed ? "▶" : "▼", EditorStyles.miniButton, GUILayout.Width(18), GUILayout.Height(16)))
+                {
+                    if (isCollapsed) _collapsedBones.Remove(index);
+                    else _collapsedBones.Add(index);
+                }
+                GUI.backgroundColor = prevBG;
+            }
+            else
+            {
+                GUILayout.Space(18);
+            }
+
+            // 骨骼名称按钮
+            var prevColor = GUI.contentColor;
+            if (isSelected)
+                GUI.contentColor = new Color(0.4f, 1f, 0.4f);
+            else if (depth == 0)
+                // 根骨骼：金色
+                GUI.contentColor = EditorGUIUtility.isProSkin
+                    ? new Color(1f, 0.85f, 0.4f)
+                    : new Color(0.6f, 0.45f, 0.1f);
+            else
+                GUI.contentColor = EditorGUIUtility.isProSkin
+                    ? new Color(0.75f, 0.75f, 0.75f)
+                    : new Color(0.3f, 0.3f, 0.3f);
+
+            string prefix = isSelected ? "►" : (node.ChildIndices.Count > 0 ? "" : "·");
+            if (GUILayout.Button($"{prefix} [{index}] {node.Name}", EditorStyles.miniLabel))
+            {
+                _selectedBoneIndex = isSelected ? -1 : index;
+                // [feat] 立即同步到 SelectionManager（避免 delayCall 时序问题）
+                var sm = ModelBoxSelectionManager.Instance;
+                if (sm != null) sm.SelectedBoneIndex = _selectedBoneIndex;
+                if (!isSelected && bone != null)
+                    EditorGUIUtility.PingObject(bone.gameObject);
+                if (_displayMode != BoneWeightDisplayMode.Off || _showBoneGizmos)
+                    EditorApplication.delayCall += () => SceneView.RepaintAll();
+            }
+
+            GUI.contentColor = prevColor;
+            EditorGUILayout.EndHorizontal();
+
+            // 递归渲染子骨骼（搜索时自动展开）
+            if (!isCollapsed || hasFilter)
+            {
+                foreach (var ci in node.ChildIndices)
+                    DrawBoneNode(ci, depth + 1, hasFilter, filterLower);
+            }
+        }
+
+        /// <summary>递归检查子树是否有骨骼名称匹配搜索词。</summary>
+        private bool DoesSubtreeMatch(int index, string filterLower)
+        {
+            if (_boneNodes[index].Name.ToLower().Contains(filterLower)) return true;
+            foreach (var ci in _boneNodes[index].ChildIndices)
+                if (DoesSubtreeMatch(ci, filterLower)) return true;
+            return false;
+        }
+
         public void Draw()
         {
+            EnsureSubscribed();
             var selected = Selection.activeTransform;
             if (selected == null)
             {
@@ -55,6 +254,25 @@ namespace ModelBox
                 return;
             }
             _cachedSourceSMR = smr; // 缓存 SMR 引用用于权重可视化目标
+
+            // [feat] 构建骨骼层级树（SMR 变化时重建 + 重置状态）
+            if (_cachedTreeSMR != smr)
+            {
+                _cachedTreeSMR = smr;
+                _selectedBoneIndex = -1;
+                _cachedBoneIndex = -1;
+                _collapsedBones.Clear();
+                BuildBoneTree(smr);
+            }
+
+            // [feat] 同步骨骼 gizmo 状态到 SelectionManager
+            var selManager = ModelBoxSelectionManager.Instance;
+            if (selManager != null)
+            {
+                selManager.ShowBoneGizmos = _showBoneGizmos;
+                selManager.SelectedBoneIndex = _selectedBoneIndex;
+                selManager.BoneWeightTargetSMR = _cachedSourceSMR;
+            }
 
             var mesh = smr.sharedMesh;
             if (mesh == null)
@@ -80,6 +298,42 @@ namespace ModelBox
             EditorGUILayout.Space(6);
             ModelBoxStyles.DrawSectionHeader("骨骼层级");
 
+            // [feat] 交互提示
+            EditorGUILayout.HelpBox(
+                "点击骨骼名称或 SceneView 中的骨骼球体选中 → 高亮（橙色球+坐标轴+名称）\n" +
+                "点击 ▼/▶ 展开/折叠子骨骼 · 搜索框可按名称过滤",
+                MessageType.None);
+
+            // [feat] 骨骼 gizmo 开关 + 全部展开/折叠
+            EditorGUILayout.BeginHorizontal();
+            EditorGUI.BeginChangeCheck();
+            _showBoneGizmos = EditorGUILayout.ToggleLeft(
+                new GUIContent("在 Scene 中显示骨骼", "在 SceneView 中显示骨骼位置标记和父子连线"),
+                _showBoneGizmos);
+            if (EditorGUI.EndChangeCheck())
+            {
+                var sm = ModelBoxSelectionManager.Instance;
+                if (sm != null) sm.ShowBoneGizmos = _showBoneGizmos;
+                EditorApplication.delayCall += () => SceneView.RepaintAll();
+            }
+            if (_boneNodes != null && _boneRootIndices != null && _boneRootIndices.Count > 0)
+            {
+                if (GUILayout.Button("全部展开", EditorStyles.miniButton, GUILayout.Width(56)))
+                {
+                    _collapsedBones.Clear();
+                    EditorApplication.delayCall += () => SceneView.RepaintAll();
+                }
+                if (GUILayout.Button("全部折叠", EditorStyles.miniButton, GUILayout.Width(56)))
+                {
+                    _collapsedBones.Clear();
+                    for (int i = 0; i < _boneNodes.Length; i++)
+                        if (_boneNodes[i].ChildIndices.Count > 0)
+                            _collapsedBones.Add(i);
+                    EditorApplication.delayCall += () => SceneView.RepaintAll();
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+
             EditorGUILayout.BeginHorizontal();
             _boneSearchFilter = EditorGUILayout.TextField(_boneSearchFilter, EditorStyles.toolbarSearchField);
             if (GUILayout.Button("✕", EditorStyles.miniButton, GUILayout.Width(22)))
@@ -88,50 +342,24 @@ namespace ModelBox
             EditorGUILayout.Space(2);
 
             // ===== 骨骼层级树 =====
-            if (bones != null && bones.Length > 0)
+            if (_boneNodes != null && _boneRootIndices != null && _boneRootIndices.Count > 0)
             {
                 _boneScrollPos = EditorGUILayout.BeginScrollView(_boneScrollPos, GUILayout.MaxHeight(300));
 
                 bool hasFilter = !string.IsNullOrEmpty(_boneSearchFilter);
                 string filterLower = hasFilter ? _boneSearchFilter.ToLower() : "";
 
-                for (int i = 0; i < bones.Length; i++)
+                foreach (var rootIdx in _boneRootIndices)
                 {
-                    var bone = bones[i];
-                    if (bone == null) continue;
-
-                    // 搜索过滤
-                    if (hasFilter && !bone.name.ToLower().Contains(filterLower))
-                        continue;
-
-                    bool isSelected = (_selectedBoneIndex == i);
-                    var prevColor = GUI.contentColor;
-
-                    if (isSelected)
-                        GUI.contentColor = new Color(0.4f, 1f, 0.4f);
-                    else
-                        GUI.contentColor = EditorGUIUtility.isProSkin
-                            ? new Color(0.75f, 0.75f, 0.75f)
-                            : new Color(0.3f, 0.3f, 0.3f);
-
-                    EditorGUILayout.BeginHorizontal();
-                    string prefix = isSelected ? "►" : "  ";
-                    if (GUILayout.Button($"{prefix} [{i}] {bone.name}", EditorStyles.miniLabel))
-                    {
-                        _selectedBoneIndex = isSelected ? -1 : i;
-                        // 选中骨骼时在 Scene 中高亮
-                        if (!isSelected)
-                            EditorGUIUtility.PingObject(bone.gameObject);
-                        // [fix] 切换骨骼时触发 SceneView 重绘（权重可视化需要更新）
-                        if (_displayMode != BoneWeightDisplayMode.Off)
-                            EditorApplication.delayCall += () => SceneView.RepaintAll();
-                    }
-                    EditorGUILayout.EndHorizontal();
-
-                    GUI.contentColor = prevColor;
+                    DrawBoneNode(rootIdx, 0, hasFilter, filterLower);
                 }
 
                 EditorGUILayout.EndScrollView();
+            }
+            else if (bones != null && bones.Length > 0)
+            {
+                // 树构建失败（骨骼全为 null）—— 显示提示
+                EditorGUILayout.HelpBox("骨骼数据异常：bones 数组非空但无法构建层级树。", MessageType.Warning);
             }
 
             // ===== 权重统计 =====
@@ -191,10 +419,19 @@ namespace ModelBox
                 ModelBoxStyles.DrawSectionHeader("权重可视化");
 
                 var prevMode = _displayMode;
-                _displayMode = (BoneWeightDisplayMode)EditorGUILayout.EnumPopup("显示模式", _displayMode);
+                _displayMode = (BoneWeightDisplayMode)EditorGUILayout.EnumPopup(
+                    new GUIContent("显示模式", "ColorMap: 顶点颜色热力图（蓝=0→红=1）\nThreshold: 仅显示权重大于阈值的顶点"),
+                    _displayMode);
 
                 if (_displayMode == BoneWeightDisplayMode.Threshold)
-                    _weightThreshold = EditorGUILayout.Slider("权重阈值", _weightThreshold, 0f, 1f);
+                    _weightThreshold = EditorGUILayout.Slider(
+                        new GUIContent("权重阈值", "仅显示权重大于此值的顶点"),
+                        _weightThreshold, 0f, 1f);
+
+                if (_displayMode == BoneWeightDisplayMode.ColorMap)
+                    _weightOpacity = EditorGUILayout.Slider(
+                        new GUIContent("不透明度", "权重表面的透明度。降低可同时看到原始材质"),
+                        _weightOpacity, 0.1f, 1f);
 
                 // 模式变化时刷新权重缓存并通知 SelectionManager
                 if (_displayMode != prevMode)
@@ -211,12 +448,13 @@ namespace ModelBox
                     }
 
                     // 写入 SelectionManager（仅在状态变化时触发重绘）
-                    var selManager = ModelBoxSelectionManager.Instance;
+                    // 复用外层已声明的 selManager（line 261）
                     if (selManager != null)
                     {
                         selManager.BoneWeightMode = _displayMode;
                         selManager.BoneVertexWeights = _cachedVertexWeights;
                         selManager.BoneWeightThreshold = _weightThreshold;
+                        selManager.BoneWeightOpacity = _weightOpacity;
                         selManager.BoneWeightTargetSMR = _cachedSourceSMR; // [fix] 指定目标 SMR
 
                         // [fix H6] 仅在模式或阈值变化时触发 SceneView 重绘
@@ -238,12 +476,11 @@ namespace ModelBox
                 }
                 else
                 {
-                    // 关闭可视化
-                    var selManager = ModelBoxSelectionManager.Instance;
+                    // 关闭权重可视化（但不清除 SMR — 骨骼 gizmo 仍可能需要它）
+                    // 复用外层已声明的 selManager（line 261）
                     if (selManager != null)
                     {
                         selManager.BoneWeightMode = BoneWeightDisplayMode.Off;
-                        selManager.BoneWeightTargetSMR = null;
                     }
                 }
             }

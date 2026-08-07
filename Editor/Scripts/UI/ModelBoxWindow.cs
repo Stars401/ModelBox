@@ -15,12 +15,14 @@ namespace ModelBox
         {
             var window = GetWindow<ModelBoxWindow>("modelBox");
             window.minSize = new Vector2(450, 500);
+            window.titleContent.image = LoadLogo();
             window.Show();
         }
 
         // ==================== Version ====================
 
         private static string _cachedVersion;
+        private static Texture2D _logoTexture;
 
         private static string GetPackageVersion()
         {
@@ -52,6 +54,18 @@ namespace ModelBox
             }
             _cachedVersion = "unknown";
             return _cachedVersion;
+        }
+
+        private static Texture2D LoadLogo()
+        {
+            if (_logoTexture != null) return _logoTexture;
+            var guids = AssetDatabase.FindAssets("modelBox_Logo t:Texture2D");
+            if (guids.Length > 0)
+            {
+                var path = AssetDatabase.GUIDToAssetPath(guids[0]);
+                _logoTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            }
+            return _logoTexture;
         }
 
         // ==================== Navigation ====================
@@ -134,6 +148,8 @@ namespace ModelBox
                 manager.OnModeChanged += OnManagerModeChanged;
                 manager.OnParametersChanged += OnManagerParamsChanged;
             }
+
+            titleContent.image = LoadLogo();
         }
 
         private void OnDisable()
@@ -145,6 +161,7 @@ namespace ModelBox
                 manager.OnParametersChanged -= OnManagerParamsChanged;
             }
             _diffPanel?.Cleanup();
+            _bonePanel?.Cleanup();
         }
 
         // ==================== Main GUI ====================
@@ -200,19 +217,32 @@ namespace ModelBox
                 ? new Color(0.13f, 0.13f, 0.13f, 1f)
                 : new Color(0.68f, 0.68f, 0.68f, 1f));
 
-            // "mB" brand text
-            if (_sidebarBrandStyle == null)
+            // Logo image (fallback: "mB" text)
+            var logo = LoadLogo();
+            if (logo != null)
             {
-                _sidebarBrandStyle = new GUIStyle(EditorStyles.miniBoldLabel)
-                {
-                    alignment = TextAnchor.MiddleCenter,
-                    fontSize = 10,
-                };
-                _sidebarBrandStyle.normal.textColor = EditorGUIUtility.isProSkin
-                    ? new Color(0.7f, 0.85f, 1f, 1f)
-                    : new Color(0.15f, 0.35f, 0.55f, 1f);
+                float logoSize = 22f;
+                var logoRect = new Rect(
+                    (SidebarWidth - logoSize) * 0.5f,
+                    (28f - logoSize) * 0.5f,
+                    logoSize, logoSize);
+                GUI.DrawTexture(logoRect, logo, ScaleMode.ScaleToFit, true);
             }
-            GUI.Label(versionRect, "mB", _sidebarBrandStyle);
+            else
+            {
+                if (_sidebarBrandStyle == null)
+                {
+                    _sidebarBrandStyle = new GUIStyle(EditorStyles.miniBoldLabel)
+                    {
+                        alignment = TextAnchor.MiddleCenter,
+                        fontSize = 10,
+                    };
+                    _sidebarBrandStyle.normal.textColor = EditorGUIUtility.isProSkin
+                        ? new Color(0.7f, 0.85f, 1f, 1f)
+                        : new Color(0.15f, 0.35f, 0.55f, 1f);
+                }
+                GUI.Label(versionRect, "mB", _sidebarBrandStyle);
+            }
 
             // Version tooltip on hover
             if (versionRect.Contains(Event.current.mousePosition))
@@ -634,6 +664,8 @@ namespace ModelBox
                 selManager.BoneWeightMode = BoneWeightDisplayMode.Off;
                 selManager.BoneVertexWeights = null;
                 selManager.BoneWeightTargetSMR = null;
+                selManager.ShowBoneGizmos = false;
+                selManager.SelectedBoneIndex = -1;
             }
         }
 
