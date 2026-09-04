@@ -244,13 +244,14 @@ namespace ModelBox
                 }
             }
 
-            Vector3[] dirs = { Vector3.right, Vector3.up, Vector3.forward };
+            // [perf v0.6] 端点计算抽象为纯函数（单元测试覆盖信息正确性），运行时复用缓存数组零分配
+            ComputeLocalAxesEndpoints(origin, rotation, length, s_axisTips);
             float arrowSize = Mathf.Max(length * 0.12f, 0.005f);
 
             for (int i = 0; i < 3; i++)
             {
-                Vector3 dir = rotation * dirs[i];
-                Vector3 tip = origin + dir * length;
+                Vector3 tip = s_axisTips[i];
+                Vector3 dir = (tip - origin) / length; // length 有下限保证非零，与已验证端点严格一致
 
                 Handles.color = AxisLineColors[i];
                 Handles.DrawAAPolyLine(2f, origin, tip);
@@ -263,6 +264,161 @@ namespace ModelBox
             Handles.color = prevColor;
             Handles.matrix = prevMatrix;
             Handles.zTest = prevZTest;
+        }
+
+        // ========== [perf v0.6] 烘焙线网格叠加（线框/法线/切线 GPU 快速路径） ==========
+
+        private static Material s_overlayLineMat;
+        private static readonly System.Collections.Generic.List<Mesh> s_trackedLineMeshes = new System.Collections.Generic.List<Mesh>();
+        private static readonly Vector3[] s_axisTips = new Vector3[3]; // 局部轴端点缓存（零分配复用）
+
+        /// <summary>
+        /// [perf v0.6] 单个烘焙线网格的顶点数上限（超过则回退旧路径，防病态网格）。
+        /// </summary>
+        private const int MAX_LINE_MESH_VERTICES = 2000000;
+
+        /// <summary>
+        /// [feat v0.6] 计算局部坐标三向轴的世界空间端点（纯函数，单元测试覆盖信息正确性）。
+        /// results 由调用方填充：运行时传缓存数组零分配，测试传新数组。
+        /// </summary>
+        public static void ComputeLocalAxesEndpoints(Vector3 origin, Quaternion rotation, float length, Vector3[] results)
+        {
+            results[0] = origin + rotation * Vector3.right * length;
+            results[1] = origin + rotation * Vector3.up * length;
+            results[2] = origin + rotation * Vector3.forward * length;
+        }
+
+        /// <summary>
+        /// [feat v0.6] 轴长：合并包围盒对角线 × 系数，下限 0.05；无包围盒时固定回退 0.5。
+        /// </summary>
+        public static float ComputeLocalAxesLength(bool hasBounds, Vector3 extents, float coefficient)
+        {
+            return hasBounds ? Mathf.Max(0.05f, extents.magnitude * coefficient) : 0.5f;
+        }
+
+        /// <summary>
+        /// [perf v0.6] 获取/初始化线框线网格：共享原始顶点 + Lines 拓扑边索引。
+        /// 构建一次缓存于 CachedMeshData；每帧仅需 1 次 DrawMeshNow（顶点变换由 GPU 完成）。
+        /// 返回 null 表示应回退旧路径（数据缺失 / 超顶点上限）。
+        /// </summary>
+        public static Mesh GetOrBuildWireframeLineMesh(CachedMeshData data)
+        {
+            if (data == null || data.Vertices == null || data.Vertices.Length == 0) return null;
+            if (data.EdgeIndices == null || data.EdgeIndices.Length == 0) return null;
+            if (data.Vertices.Length > MAX_LINE_MESH_VERTICES) return null;
+            if (data.WireframeLineMesh != null) return data.WireframeLineMesh;
+
+            var mesh = new Mesh
+            {
+                name = "ModelBox_WF_Line",
+                vertices = data.Vertices,
+                // uv0.x 全 0 → shader 不拉伸；即使 normals 缺失拉伸贡献也为 0，数学安全
+                uv = new Vector2[data.Vertices.Length]
+            };
+            if (data.Vertices.Length > 65535) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+            mesh.SetIndices(data.EdgeIndices, MeshTopology.Lines, 0, false);
+            data.WireframeLineMesh = mesh;
+            s_trackedLineMeshes.Add(mesh);
+            return mesh;
+        }
+
+        /// <summary>
+        /// [perf v0.6] 获取/初始化法线/切线拉伸线网格：每顶点一条线段（基点 → 基点 + 方向 × _Length），
+        /// 拉伸量为 shader uniform（_Length），长度滑条变化零重建。
+        /// 返回 null 表示应回退旧路径（数据缺失 / 超顶点上限）。
+        /// </summary>
+        public static Mesh GetOrBuildStretchLineMesh(CachedMeshData data, bool tangents)
+        {
+            if (data == null || data.Vertices == null || data.Vertices.Length == 0) return null;
+            if (data.Vertices.Length > MAX_LINE_MESH_VERTICES / 2) return null;
+            if (!tangents && data.NormalLineMesh != null) return data.NormalLineMesh;
+            if (tangents && data.TangentLineMesh != null) return data.TangentLineMesh;
+
+            Vector3[] dirs;
+            if (tangents)
+            {
+                if (data.Tangents == null || data.Tangents.Length < data.Vertices.Length) return null;
+                dirs = new Vector3[data.Vertices.Length];
+                for (int i = 0; i < data.Vertices.Length; i++)
+                {
+                    var t = data.Tangents[i];
+                    dirs[i] = new Vector3(t.x, t.y, t.z).normalized;
+                }
+            }
+            else
+            {
+                if (data.Normals == null || data.Normals.Length < data.Vertices.Length) return null;
+                dirs = data.Normals;
+            }
+
+            int n = data.Vertices.Length;
+            var pos = new Vector3[n * 2];
+            var nrm = new Vector3[n * 2];
+            var uv = new Vector2[n * 2];
+            var idx = new int[n * 2];
+            for (int i = 0; i < n; i++)
+            {
+                int a = i * 2, b = a + 1;
+                pos[a] = data.Vertices[i];
+                pos[b] = data.Vertices[i];
+                nrm[a] = dirs[i];
+                nrm[b] = dirs[i];
+                uv[a] = Vector2.zero; // 起点：不拉伸
+                uv[b] = Vector2.one;  // 终点：按 _Length 拉伸
+                idx[a] = a;
+                idx[b] = b;
+            }
+
+            var mesh = new Mesh { name = tangents ? "ModelBox_Tan_Line" : "ModelBox_Nrm_Line" };
+            if (n * 2 > 65535) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+            mesh.vertices = pos;
+            mesh.normals = nrm;
+            mesh.uv = uv;
+            mesh.SetIndices(idx, MeshTopology.Lines, 0, false);
+
+            if (tangents) data.TangentLineMesh = mesh;
+            else data.NormalLineMesh = mesh;
+            s_trackedLineMeshes.Add(mesh);
+            return mesh;
+        }
+
+        /// <summary>
+        /// [perf v0.6] 获取/初始化 OverlayLine 材质（单实例，_ZTest 按次切换，沿用 BoneWeight 材质范式）。
+        /// </summary>
+        private static Material GetOverlayLineMaterial(bool depthTest)
+        {
+            var shader = Shader.Find("Hidden/ModelBox/OverlayLine");
+            if (shader == null)
+            {
+                Debug.LogWarning("[ModelBox] Shader 'Hidden/ModelBox/OverlayLine' not found, falling back to legacy line drawing path.");
+                return null;
+            }
+            if (s_overlayLineMat == null || s_overlayLineMat.shader != shader)
+                s_overlayLineMat = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
+            s_overlayLineMat.SetInt("_ZTest", (int)(depthTest ? CompareFunction.LessEqual : CompareFunction.Always));
+            return s_overlayLineMat;
+        }
+
+        /// <summary>
+        /// [perf v0.6] 绘制烘焙线网格：单次 DrawMeshNow，顶点变换由 GPU 经 localToWorld 完成。
+        /// stretchLength > 0 时 tip 顶点沿烘焙方向拉伸（法线/切线）；为 0 时原样渲染（线框）。
+        /// </summary>
+        public static void DrawOverlayLineMesh(Mesh lineMesh, Matrix4x4 localToWorld, Camera camera,
+            Color color, float stretchLength, bool depthTest)
+        {
+            var mat = GetOverlayLineMaterial(depthTest);
+            if (mat == null || lineMesh == null) return;
+
+            mat.SetColor("_Color", color);
+            mat.SetFloat("_Length", stretchLength);
+
+            // 显式设置 SceneView 相机矩阵（duringSceneGui 期间 GL 状态），确保绘制落在正确相机空间
+            GL.PushMatrix();
+            GL.LoadProjectionMatrix(camera.projectionMatrix);
+            GL.modelview = camera.worldToCameraMatrix * localToWorld;
+            mat.SetPass(0);
+            Graphics.DrawMeshNow(lineMesh, Matrix4x4.identity);
+            GL.PopMatrix();
         }
 
         /// <summary>
@@ -649,6 +805,11 @@ namespace ModelBox
             // [fix] 清理骨骼权重表面渲染资源
             if (_boneWeightSurfaceMat != null) { Object.DestroyImmediate(_boneWeightSurfaceMat); _boneWeightSurfaceMat = null; }
             if (_boneWeightTempMesh != null) { Object.DestroyImmediate(_boneWeightTempMesh); _boneWeightTempMesh = null; }
+            // [perf v0.6] 清理烘焙线网格与线材质
+            foreach (var lm in s_trackedLineMeshes)
+                if (lm != null) Object.DestroyImmediate(lm);
+            s_trackedLineMeshes.Clear();
+            if (s_overlayLineMat != null) { Object.DestroyImmediate(s_overlayLineMat); s_overlayLineMat = null; }
             _boneWeightTempMeshHash = 0;
             _lastSurfaceWeights = null;
             _instanceMatrices = null;

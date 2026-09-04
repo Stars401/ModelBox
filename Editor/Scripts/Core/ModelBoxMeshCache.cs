@@ -20,6 +20,15 @@ namespace ModelBox
 
         /// <summary>网格的绑定骨骼姿态（SkinnedMeshRenderer 需要）。</summary>
         public Matrix4x4[] Bindposes;
+
+        /// <summary>[perf v0.6] 烘焙线框网格：共享原始顶点 + Lines 拓扑索引。懒构建，GPU 直接变换顶点，替代逐帧 DrawLines。</summary>
+        public Mesh WireframeLineMesh;
+
+        /// <summary>[perf v0.6] 烘焙法线拉伸线网格：每顶点 (基点, 方向, tip 标记)，_Length uniform 拉伸，滑条零重建。</summary>
+        public Mesh NormalLineMesh;
+
+        /// <summary>[perf v0.6] 烘焙切线拉伸线网格：结构同法线网格。</summary>
+        public Mesh TangentLineMesh;
     }
 
     [InitializeOnLoad]

@@ -63,7 +63,7 @@ namespace ModelBox
         public Color NormalColor { get; set; } = new Color(0.3f, 0.6f, 1f, 0.7f);
         public float VertexSize { get; set; } = 0.03f;
         public float NormalLength { get; set; } = 0.1f;
-        public float NormalWidth { get; set; } = 2f;
+        public float NormalWidth { get; set; } = 1f; // [perf v0.6] 默认细线走烘焙线网格快速路径；>1 为逐线粗线（高面数明显变慢）
         public bool VertexScaleIndependent { get; set; } = true;
 
         // GPU 加速开关（默认开启）
@@ -72,7 +72,7 @@ namespace ModelBox
         // 切线叠加
         public Color TangentColor { get; set; } = new Color(1f, 1f, 0.2f, 0.8f);
         public float TangentLength { get; set; } = 0.1f;
-        public float TangentWidth { get; set; } = 2f;
+        public float TangentWidth { get; set; } = 1f; // [perf v0.6] 同法线宽度
 
         // 包围盒叠加
         public Color BoundsColor { get; set; } = new Color(0f, 1f, 0.5f, 0.6f);
@@ -559,8 +559,13 @@ namespace ModelBox
                 // billboard 等辅助 Renderer 也可能存在但不应该被调试
                 if (!r.enabled || !r.gameObject.activeInHierarchy) continue;
 
-                if (hasBounds) combinedBounds.Encapsulate(r.bounds);
-                else { combinedBounds = r.bounds; hasBounds = true; }
+                // [fix v0.6] 轴长基准只统计网格类 Renderer（MeshRenderer/SkinnedMeshRenderer）——
+                // 粒子等特效 Renderer 的 bounds 会把轴长撑到失真，导致局部坐标轴信息不可信
+                if (r is MeshRenderer || r is SkinnedMeshRenderer)
+                {
+                    if (hasBounds) combinedBounds.Encapsulate(r.bounds);
+                    else { combinedBounds = r.bounds; hasBounds = true; }
+                }
 
                 // [perf v0.6] 无需网格数据时（如仅局部坐标轴叠加）跳过网格提取与叠加绘制
                 if (!needsMeshData) continue;
@@ -607,9 +612,8 @@ namespace ModelBox
         {
             if (target == null) return;
 
-            float length = hasBounds
-                ? Mathf.Max(0.05f, combinedBounds.extents.magnitude * LocalAxesLength)
-                : 0.5f;
+            // [fix v0.6] 轴长计算收敛到纯函数（单元测试覆盖），保证信息正确性有测试兜底
+            float length = ModelBoxOverlayRenderer.ComputeLocalAxesLength(hasBounds, combinedBounds.extents, LocalAxesLength);
 
             var settings = ModelBoxSettings.GetOrCreate();
             bool depthTest = settings != null && settings.OverlayDepthTest;
@@ -641,7 +645,7 @@ namespace ModelBox
             if (data == null) return;
 
             if (UseGPURendering)
-                DrawMeshOverlayGPU(renderer, data, camera);
+                DrawMeshOverlayGPU(renderer, data, camera, isSkinned);
             else
                 DrawMeshOverlayLegacy(renderer, data);
         }
@@ -650,7 +654,7 @@ namespace ModelBox
         /// GPU 批量渲染路径：GL.LINES + Graphics.DrawMeshInstanced。
         /// 每帧仅 1~4 次 draw call，高面数场景下性能提升数百倍。
         /// </summary>
-        private void DrawMeshOverlayGPU(Renderer renderer, CachedMeshData data, Camera camera)
+        private void DrawMeshOverlayGPU(Renderer renderer, CachedMeshData data, Camera camera, bool isSkinned)
         {
             // Unity 2020.2+ BakeMesh 输出在 renderer 本地空间，配合 localToWorldMatrix 正确。
             var matrix = renderer.transform.localToWorldMatrix;
@@ -663,8 +667,18 @@ namespace ModelBox
 
             if ((OverlayFlags & MeshOverlayFlags.Wireframe) != 0)
             {
-                Handles.zTest = zFunc;
-                ModelBoxOverlayRenderer.DrawWireframe(data, matrix, WireframeColor, camera, bounds);
+                // [perf v0.6] 静态网格优先走烘焙线网格（1 次 DrawMeshNow，顶点变换由 GPU 完成，零逐帧 CPU）；
+                // 蒙皮顶点逐帧变化，保持原路径
+                var wfMesh = isSkinned ? null : ModelBoxOverlayRenderer.GetOrBuildWireframeLineMesh(data);
+                if (wfMesh != null)
+                {
+                    ModelBoxOverlayRenderer.DrawOverlayLineMesh(wfMesh, matrix, camera, WireframeColor, 0f, depthTest);
+                }
+                else
+                {
+                    Handles.zTest = zFunc;
+                    ModelBoxOverlayRenderer.DrawWireframe(data, matrix, WireframeColor, camera, bounds);
+                }
             }
 
             // [feat] 顶点覆盖：显式开启 或 骨骼权重模式激活时自动启用
@@ -700,14 +714,32 @@ namespace ModelBox
 
             if ((OverlayFlags & MeshOverlayFlags.Normals) != 0)
             {
-                Handles.zTest = zFunc;
-                ModelBoxOverlayRenderer.DrawNormals(data, matrix, NormalColor, NormalLength, NormalWidth, camera, bounds);
+                // [perf v0.6] 宽度 ≤1 走烘焙拉伸线网格（_Length uniform，滑条零重建）；>1 保留逐线粗线（高面数明显变慢）
+                var nMesh = (isSkinned || NormalWidth > 1f) ? null : ModelBoxOverlayRenderer.GetOrBuildStretchLineMesh(data, false);
+                if (nMesh != null)
+                {
+                    ModelBoxOverlayRenderer.DrawOverlayLineMesh(nMesh, matrix, camera, NormalColor, NormalLength, depthTest);
+                }
+                else
+                {
+                    Handles.zTest = zFunc;
+                    ModelBoxOverlayRenderer.DrawNormals(data, matrix, NormalColor, NormalLength, NormalWidth, camera, bounds);
+                }
             }
 
             if ((OverlayFlags & MeshOverlayFlags.Tangents) != 0)
             {
-                Handles.zTest = zFunc;
-                ModelBoxOverlayRenderer.DrawTangents(data, matrix, TangentColor, TangentLength, TangentWidth, camera, bounds);
+                // [perf v0.6] 同法线：宽度 ≤1 走烘焙拉伸线网格
+                var tMesh = (isSkinned || TangentWidth > 1f) ? null : ModelBoxOverlayRenderer.GetOrBuildStretchLineMesh(data, true);
+                if (tMesh != null)
+                {
+                    ModelBoxOverlayRenderer.DrawOverlayLineMesh(tMesh, matrix, camera, TangentColor, TangentLength, depthTest);
+                }
+                else
+                {
+                    Handles.zTest = zFunc;
+                    ModelBoxOverlayRenderer.DrawTangents(data, matrix, TangentColor, TangentLength, TangentWidth, camera, bounds);
+                }
             }
 
             // AABB 包围盒不需要 mesh data，直接从 Renderer 绘制
