@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using UnityEngine;
 using UnityEditor;
+using UnityEngine.Rendering; // [fix v0.6] ShaderPropertyType 位于此命名空间 — 缺此 using 导致测试程序集从未编译通过（Unity 实测首次暴露）
 
 namespace ModelBox.Tests
 {
