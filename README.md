@@ -11,7 +11,7 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 - **零侵入**：不修改你的 Shader，不增加 Shader Variant，纯 Editor 工具构建时自动剥离
 - **35 种调试模式**：覆盖几何数据、诊断、PBR 分析、光照分离、导数诊断 5 大类别
 - **分屏对比**：左侧正常渲染 + 右侧调试模式，支持冻结快照和 A/B 帧对比
-- **选区调试**：对选中物体单独进行材质覆盖（贴图通道/棋盘格/属性颜色）和网格叠加（线框/顶点/法线/切线/AABB）
+- **选区调试**：对选中物体单独进行材质覆盖（贴图通道/棋盘格/属性颜色）和网格叠加（线框/顶点/法线/切线/AABB/局部坐标）
 - **骨骼面板**：独立侧边栏页面，骨骼层级树、逐骨骼权重统计、搜索过滤
 - **Shader 信息面板**：查看/切换 Keywords（绿色高亮已启用）、Passes、Properties（可编辑 + Undo）
 - **Mesh 信息面板**：顶点数、UV 通道、子网格材质分配、LOD 层级预览
@@ -53,7 +53,7 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 
 ---
 
-## 主窗口（6 个侧边栏页面）
+## 主窗口（7 个侧边栏页面）
 
 | 页面 | 图标 | 功能 |
 |------|------|------|
@@ -61,7 +61,7 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 | **场景** | Sc | 35 种调试模式选择 + 参数调节 |
 | **物体** | Ob | 选区调试（贴图通道/UV棋盘格/Shader属性）+ Shader 信息 |
 | **沙盒** | Sb | 材质 A/B 对比测试 |
-| **骨骼** | Bo | 骨骼层级树 + 蒙皮权重统计 + 权重可视化（热力图/过滤模式） |
+| **骨骼** | Bo | 骨骼层级树 + 3D 骨骼 gizmo + 蒙皮权重可视化（热力图/过滤模式） |
 | **网格** | Me | 网格详情 + 子网格材质 + LOD 层级预览 |
 | **设置** | St | 安装/卸载、UI 偏好、HUD 配置、快捷键参考 |
 
@@ -148,7 +148,7 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 
 | 模式 | 说明 |
 |------|------|
-| **贴图通道** | 隔离 R/G/B/A/RGB 通道，支持自定义贴图、UV 通道切换、世界坐标 UV、亮度范围钳制 |
+| **贴图通道** | 隔离 R/G/B/A/RGB 通道，支持自定义贴图、UV 通道切换、世界坐标 UV、单色（灰度）显示、亮度范围钳制（范围内数值重映射 0~1） |
 | **UV 棋盘格** | 棋盘格图案检查 UV 展开，可调网格密度和颜色 |
 | **Shader 属性颜色** | 指定 Shader 属性 → 纯色（支持 Color/Float，一键读取） |
 
@@ -161,6 +161,7 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 | **法线** | 顶点法线方向线，支持粗线（DrawAAPolyLine） |
 | **切线** | 顶点切线方向线 |
 | **AABB** | 世界空间包围盒线框（12 条边） |
+| **局部坐标** | 模型原点（pivot）三向轴：X红/Y绿/Z蓝 + 圆锥箭头 + 轴标签，轴长随选中层级合并包围盒自适应（可调系数） |
 
 > 同时支持 `MeshRenderer` 和 `SkinnedMeshRenderer`（BakeMesh 烘焙后叠加）。
 > 深度测试可在设置页切换：关闭后叠加点可穿透模型显示。
@@ -172,11 +173,13 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 独立侧边栏页面（「骨骼」），功能包括：
 
 - 骨骼概览：骨骼数量、根骨骼、Blend Shapes、Bindpose
-- 骨骼层级树：可滚动列表，点击骨骼在 Scene 中高亮
-- 搜索过滤：按骨骼名称快速过滤
+- **骨骼层级树**：按 Transform 父子关系构建缩进树，根骨骼金色高亮，支持展开/折叠、全部展开/折叠按钮
+- **3D 骨骼 gizmo**：在 SceneView 中渲染骨骼位置标记（蓝色球体，大小随模型自适应）和父子连线
+- **SceneView 点击选骨骼**：直接在 3D 视图中点击骨骼球体选中，选中骨骼显示橙色高亮 + 坐标轴 + 名称标签
+- 搜索过滤：按骨骼名称快速过滤（自动展开匹配子树）
 - 权重统计：选中骨骼后显示受影响顶点数、最大权重、平均权重
 - **权重可视化**（两种模式，用户单选）：
-  - **顶点颜色模式 (ColorMap)**：所有顶点按权重热力图着色（蓝=0 → 绿=0.5 → 红=1）
+  - **顶点颜色模式 (ColorMap)**：所有顶点按权重热力图着色（蓝=0 → 绿=0.5 → 红=1），SceneView 左下角显示渐变图例，可调表面透明度
   - **顶点过滤模式 (Threshold)**：仅显示权重 > 阈值的顶点，可调阈值滑条
 - 临时材质管理：可视化结束自动清理，不影响原始材质
 
@@ -237,7 +240,7 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 
 ```
 ┌─ UI 层 ──────────────────────────────────────────────────────────────┐
-│  ModelBoxWindow (6 页面 EditorWindow: 检查/场景/物体/沙盒/骨骼/设置)  │
+│  ModelBoxWindow (7 页面 EditorWindow: 检查/场景/物体/沙盒/骨骼/网格/设置) │
 │  ModelBoxSceneOverlay (SceneView 浮动工具栏, 分组下拉 + 分屏/冻结)   │
 │  ModelBoxBonePanel (骨骼侧边栏独立页面)                               │
 │  ModelBoxPixelBar (底部像素信息条)                                    │
@@ -265,10 +268,10 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 
 | 模式类型 | 渲染路径 | 说明 |
 |---------|---------|------|
-| Geometry (29 种) | `overrideMaterial` + `DrawRenderers` | 单 Pass，统一调试 Shader |
+| Geometry (29 种) | `overrideMaterial` + `DrawRenderers` | 不透明队列 @ AfterRenderingOpaques；v0.6 起透明队列 @ AfterRenderingTransparents+2（覆盖水面/玻璃/粒子等，透明物体以不透明化调试色显示） |
 | ScreenSpace (3 种) | 全屏 Blit + 深度重建 | Depth, ScreenNormal, RayMarch |
 | Capture+Draw (3 种) | 双 Pass | OpaqueTexture, Overdraw, TransparencyLayers |
-| Overlay (5 种) | Handles API + Shader 底色 | Wireframe, Vertices, Normals, Tangents, Bounds |
+| Overlay (6 种) | Handles API + Shader 底色 | Wireframe, Vertices, Normals, Tangents, Bounds, LocalAxes |
 | Split Composite | 全屏三角形合成 | 左正常 + 右调试 + 快照 A/B |
 
 ### Shader 技术决策
@@ -302,12 +305,12 @@ com.unity.modelbox/
 │   │   │   ├── ModelBoxOverlayRenderer.cs      # GPU 叠加渲染器
 │   │   │   └── ModelBoxShaderInfo.cs           # Shader 信息分析
 │   │   ├── UI/
-│   │   │   ├── ModelBoxWindow.cs               # 主 EditorWindow (6 页面)
+│   │   │   ├── ModelBoxWindow.cs               # 主 EditorWindow (7 页面)
 │   │   │   ├── ModelBoxSceneOverlay.cs         # SceneView 浮动工具栏
 │   │   │   ├── ModelBoxModeSelector.cs         # 模式选择 UI
 │   │   │   ├── ModelBoxParameterControls.cs    # 参数调节 UI
 │   │   │   ├── ModelBoxPixelBar.cs             # 像素信息条
-│   │   │   ├── ModelBoxSelectionInspector.cs   # 选区调试 UI (4 子标签)
+│   │   │   ├── ModelBoxSelectionInspector.cs   # 选区调试 UI (5 子标签)
 │   │   │   ├── ModelBoxBonePanel.cs            # 骨骼侧边栏面板
 │   │   │   ├── ShaderInfoPanel.cs              # Shader 信息面板
 │   │   │   ├── MeshInfoPanel.cs                # Mesh 信息面板
@@ -357,7 +360,7 @@ com.unity.modelbox/
 | 限制 | 说明 | 缓解方案 |
 |------|------|---------|
 | **仅 URP** | HDRP / Built-in 暂不支持 | 各需 2-3 周，评估需求后考虑 |
-| **仅不透明物体** | 透明物体、UI Canvas 不在覆盖范围 | TransparencyLayers 模式可统计透明层叠 |
+| **UI Canvas (Overlay) 不受覆盖** | v0.6 起几何调试模式已覆盖透明队列物体（水面/玻璃/粒子，以不透明化调试色显示）；但 Screen Space-Overlay 的 UI Canvas 在相机 SRP Pass 之外，仍不在覆盖范围 | 透明层叠统计用 TransparencyLayers 模式；Overlay Canvas 建议临时切为 Screen Space-Camera |
 | **顶点动画丢失** | overrideMaterial 替换整个 Shader，自定义顶点动画丢失 | 这是 overrideMaterial 的根本限制 |
 | **FPS [BETA]** | Editor 中帧率基于时间差近似，非精确帧计数 | 设置中可关闭，仅作参考 |
 | **Overdraw 精度** | R8 格式饱和于 16 次绘制 | 可通过 Overdraw Max 滑条调整灵敏度 |
@@ -367,7 +370,28 @@ com.unity.modelbox/
 
 ## 版本历史
 
-### v0.4.0（当前）
+### v0.6.0（当前）
+- **几何调试模式透明队列覆盖**：新增透明队列调试 Pass（AfterRenderingTransparents+2 注入），水面/玻璃/粒子/相机空间 UI 等透明队列物体不再保持原样渲染 — 几何数据模式（坐标/法线/UV/顶点色/切线等）实现全场景覆盖；透明物体以不透明化调试色显示，排序与 URP 透明 Pass 一致（CommonTransparent），SEL 仅选中物体模式对透明队列同样生效
+- **模型局部坐标叠加**：网格叠加新增「局部坐标」— 在选中物体原点（pivot）绘制 X/Y/Z 三向轴（红/绿/蓝 + 圆锥箭头 + 轴标签），帮助开发者快速分辨模型局部坐标系朝向；轴长随选中层级合并包围盒自适应，系数可调（0.1~2.0），深度测试遵循叠加深度测试设置
+- **检查页快捷入口**：「局部坐标」加入检查页快捷按钮行（线框/顶点/法线/切线/AABB 同排）；物体页网格叠加标签页提供开关与轴长设置
+- **叠加性能优化**：仅开启局部坐标轴时跳过网格缓存构建（该叠加不依赖网格数据，避免高面数模型无谓开销）
+
+### v0.5.0
+- **骨骼 gizmo 渲染**：SceneView 中显示骨骼位置标记（蓝色球体）、父子连线、选中骨骼高亮（橙色球 + 坐标轴 + 名称标签）
+- **骨骼 gizmo 自适应大小**：标记大小根据模型包围盒自动缩放，不同尺度模型均正确显示
+- **SceneView 点击选骨骼**：在 3D 视图中直接点击骨骼球体选中（屏幕空间 20px 阈值），通过事件回调同步到面板列表
+- **骨骼层级树**：从扁平列表升级为 Transform 父子关系缩进树，支持展开/折叠、全部展开/折叠、搜索自动展开子树
+- **根骨骼高亮**：层级树中根骨骼以金色显示，子骨骼灰色，选中绿色 — 三级视觉层次
+- **权重表面透明度**：BoneWeight shader 添加 Alpha blend + _Opacity 属性，滑条控制 0.1~1.0，可同时看到原始材质
+- **ColorMap 性能优化**：仅在骨骼选择变化时更新顶点颜色（避免每帧 SetColors 上传）
+- **Z-fighting 修复**：BoneWeight shader 添加 Offset 深度偏移，权重表面不再与模型表面闪烁
+- **SceneView 权重图例**：ColorMap 模式下左下角显示蓝→绿→红渐变条 + 阈值标签
+- **选择切换重置**：切换选中物体时重置骨骼选中状态、折叠状态和权重缓存
+- **事件泄漏修复**：骨骼点击事件在域重载/窗口关闭时正确取消订阅
+- **交互提示**：骨骼面板添加帮助文本和控件 tooltip
+- **页面计数修正**：README 主窗口从 6 页修正为 7 页
+
+### v0.4.0
 - **沙盒修复**：材质替换失败根因修复（SceneView 重绘缺失 + TogglePreview 引用混乱 + LODGroup 多 Renderer 遗漏）
 - **PixelBar 拾取修复**：Renderer 查找优先同级而非深度优先、多 Renderer mesh raycast 取最近命中
 - **PixelBar 参数修复**：LocalPosition 使用 Renderer transform、GPU-only 模式标记 N/A、NdotL/NdotV/Fresnel CPU 端计算

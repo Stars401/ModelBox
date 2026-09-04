@@ -497,6 +497,17 @@ namespace ModelBox
                     ToggleMiniButton("法线", ref flags, MeshOverlayFlags.Normals, selManager);
                     ToggleMiniButton("切线", ref flags, MeshOverlayFlags.Tangents, selManager);
                     ToggleMiniButton("AABB", ref flags, MeshOverlayFlags.Bounds, selManager);
+                    // [feat v0.6] 模型局部坐标快捷开关（网格叠加：原点三向轴）
+                    ToggleMiniButton("局部坐标", ref flags, MeshOverlayFlags.LocalAxes, selManager);
+                    // [feat] 顶点颜色可视化快捷开关（选区材质调试，非网格叠加）
+                    {
+                        bool vcActive = selManager.CurrentMode == SelectionDebugMode.VertexColor;
+                        var prevBg = GUI.backgroundColor;
+                        if (vcActive) GUI.backgroundColor = ModelBoxStyles.GetActiveButtonColor();
+                        if (GUILayout.Toggle(vcActive, " 顶点色 ", EditorStyles.miniButton) != vcActive)
+                            selManager.SetMode(vcActive ? SelectionDebugMode.None : SelectionDebugMode.VertexColor);
+                        GUI.backgroundColor = prevBg;
+                    }
                     EditorGUILayout.EndHorizontal();
 
                     // 叠加样式控件（仅在有叠加激活时显示）
@@ -522,6 +533,11 @@ namespace ModelBox
                         }
                         if ((flags & MeshOverlayFlags.Bounds) != 0)
                             selManager.BoundsColor = EditorGUILayout.ColorField("AABB 颜色", selManager.BoundsColor);
+                        // [feat v0.6] 局部坐标轴长度（轴长 = 合并包围盒对角线 × 系数）
+                        if ((flags & MeshOverlayFlags.LocalAxes) != 0)
+                            selManager.LocalAxesLength = EditorGUILayout.Slider(
+                                new GUIContent("局部坐标轴长度", "轴长 = 选中层级合并包围盒对角线 × 系数"),
+                                selManager.LocalAxesLength, 0.1f, 2f);
                         if (EditorGUI.EndChangeCheck())
                             EditorApplication.delayCall += () => SceneView.RepaintAll();
                     }

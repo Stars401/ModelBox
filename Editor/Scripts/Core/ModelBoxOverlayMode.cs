@@ -9,6 +9,7 @@ namespace ModelBox
         TextureChannel = 1,  // 贴图通道隔离
         Checkerboard = 2,    // UV 棋盘格
         ShaderProperty = 3,  // Shader 属性颜色回读
+        VertexColor = 4,     // 顶点颜色可视化（显示 mesh 内置 COLOR 数据）
     }
 
     /// <summary>
@@ -23,6 +24,7 @@ namespace ModelBox
         Normals = 1 << 2,
         Tangents = 1 << 3,
         Bounds = 1 << 4,
+        LocalAxes = 1 << 5, // [feat v0.6] 模型局部坐标：模型原点三向轴（X红/Y绿/Z蓝）
     }
 
     /// <summary>

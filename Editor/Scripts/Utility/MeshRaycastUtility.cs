@@ -21,7 +21,9 @@ namespace ModelBox
             public Vector3 normal;       // 世界空间法线
             public Vector2 textureCoord; // UV0
             public float distance;       // 射线起点到命中点的距离
-            public int triangleIndex;    // 命中的三角形索引
+            public int triangleIndex;    // 命中的三角形索引（子网格内）
+            public int subMesh;          // [feat] 命中的子网格索引（供任意 UV 通道/顶点色插值）
+            public Vector2 barycentric;  // [feat] 重心坐标 (u, v)：v1/v2 权重，v0 权重 = 1 - x - y
         }
 
         private const float Epsilon = 1e-8f;
@@ -121,6 +123,8 @@ namespace ModelBox
             }
 
             hit.triangleIndex = hitTriIdx;
+            hit.subMesh = hitSubMesh;
+            hit.barycentric = new Vector2(hitU, hitV);
             return true;
         }
 

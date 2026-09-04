@@ -83,29 +83,30 @@ Shader "Hidden/ModelBox/TextureChannel"
             {
                 half4 tex = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, input.uv);
 
-                // 计算选中通道的标量值
-                half selectedChannel = dot(tex, _ChannelMask);
+                // [fix] 选中通道标量：RGB 模式用亮度（原通道加权和可 >1，导致钳制范围 0~1 内永远失效）；
+                // 单通道（R/G/B/A）用 dot 提取对应分量
+                bool isRgbMode = (_ChannelMask.r + _ChannelMask.g + _ChannelMask.b) > 1.5;
+                float selectedChannel = isRgbMode
+                    ? dot(tex.rgb, half3(0.299, 0.587, 0.114))
+                    : dot(tex, _ChannelMask);
 
-                // 钳制：在 [_ClampMin, _ClampMax] 范围内的区域显示原色，范围外显示暗色
-                // 硬边 step() 精确标定阈值边界（模拟 shader 中的 step 采样）
-                float inRange = step(_ClampMin, selectedChannel) * (1.0 - step(_ClampMax, selectedChannel));
+                // [fix] 亮度范围钳制：范围内数值重映射到 0~1（窄带拉伸，放大细微差异便于观察），
+                // 范围外显示为暗色（保留定位能力）。闭区间 [Min, Max]；Min==Max 时防除零。
+                if (_ClampMin > 0.001 || _ClampMax < 0.999)
+                {
+                    float range = max(_ClampMax - _ClampMin, 1e-4);
+                    float normalized = saturate((selectedChannel - _ClampMin) / range);
+                    float inRange = step(_ClampMin, selectedChannel) * step(selectedChannel, _ClampMax);
+                    float3 band = normalized.xxx * inRange + half3(0.04, 0.04, 0.04) * (1.0 - inRange);
+                    return half4(band, 1);
+                }
 
-                half4 result;
+                // [feat] 单色（灰度）显示：隔离通道以灰度呈现，避免红/蓝色调影响数值观察
                 if (_DisplayMode == 1)
-                {
-                    // 灰度模式：通道值 → 灰度，钳制范围外变暗
-                    result = half4(selectedChannel, selectedChannel, selectedChannel, 1);
-                }
-                else
-                {
-                    // 通道模式：隔离选中通道，钳制范围外变暗
-                    result = tex * half4(_ChannelMask.rgb, 1);
-                }
+                    return half4(selectedChannel.xxx, 1);
 
-                // 应用钳制蒙版（范围内=原色，范围外=微弱暗灰保留形状感知）
-                result.rgb = result.rgb * inRange + half3(0.04, 0.04, 0.04) * (1.0 - inRange);
-
-                return result;
+                // 通道着色显示（原有行为）：R → 红、G → 绿、B → 蓝
+                return tex * half4(_ChannelMask.rgb, 1);
             }
             ENDHLSL
         }

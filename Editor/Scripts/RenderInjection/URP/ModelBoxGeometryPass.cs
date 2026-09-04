@@ -17,6 +17,12 @@ namespace ModelBox
     ///     相机颜色（仅 opaque 物体）到临时纹理，供 Draw Pass 采样。
     ///   - Overdraw 模式：Capture Phase — 在 AfterRenderingOpaques+1 用计数 shader
     ///     累加绘制到临时纹理，供 OverdrawHeatmap Draw Pass 采样。
+    /// [fix v0.6] 透明队列覆盖：drawTransparentQueue=true 的实例只绘制 transparent 队列
+    ///   （2500-5000：水面/玻璃/粒子/相机空间 UI），由 Feature 在 AfterRenderingTransparents+2
+    ///   注入 — 在真实透明 Pass 之后用调试材质覆盖，补齐几何调试模式的全场景覆盖
+    ///   （此前 RenderQueueRange.opaque 漏掉所有透明队列物体，保持原样渲染）。
+    ///   调试 shader ZWrite Off，透明队列调试绘制不污染深度缓冲；
+    ///   遮挡关系由 ZTest LEqual 对不透明几何深度判定，排序沿用 CommonTransparent。
     /// </summary>
     public class ModelBoxGeometryPass : ScriptableRenderPass
     {
@@ -28,6 +34,7 @@ namespace ModelBox
         private ModelBoxParameters _currentParams;
         private bool _passEnabled;
         private bool _debugOnlySelected; // [feat] SEL 模式：仅对选中物体应用调试效果
+        private readonly bool _drawTransparentQueue; // [fix v0.6] 透明队列实例标志
 
 #if UNITY_2022_1_OR_NEWER
         private RTHandle _cameraColorHandle;
@@ -66,11 +73,13 @@ namespace ModelBox
         /// <summary>分屏模式：正常场景捕获纹理。</summary>
         public RTHandle NormalSceneCaptureTexture => _normalSceneCaptureHandle;
 
-        public ModelBoxGeometryPass(Material overrideMaterial, Material overdrawCountMaterial = null)
+        public ModelBoxGeometryPass(Material overrideMaterial, Material overdrawCountMaterial = null, bool drawTransparentQueue = false)
         {
             _overrideMaterial = overrideMaterial;
             _overdrawCountMaterial = overdrawCountMaterial;
-            _filterSettings = new FilteringSettings(RenderQueueRange.opaque);
+            _drawTransparentQueue = drawTransparentQueue;
+            _filterSettings = new FilteringSettings(
+                drawTransparentQueue ? RenderQueueRange.transparent : RenderQueueRange.opaque);
 
             _shaderTags = new List<ShaderTagId>
             {
@@ -135,10 +144,11 @@ namespace ModelBox
             CommandBuffer cmd = CommandBufferPool.Get("ModelBox");
 
             // [feat] SEL 模式：临时将选中物体分配到专用 Layer，渲染后恢复
+            // [fix v0.6] SEL + 透明队列实例：过滤队列与所属实例保持一致
             var selectedTransforms = _debugOnlySelected ? GetSelectedHierarchy() : null;
             var originalLayers = _debugOnlySelected ? SaveAndSetLayers(selectedTransforms, SelLayer) : null;
             var filterSettings = _debugOnlySelected
-                ? new FilteringSettings(RenderQueueRange.opaque, SelLayerMask)
+                ? new FilteringSettings(_drawTransparentQueue ? RenderQueueRange.transparent : RenderQueueRange.opaque, SelLayerMask)
                 : _filterSettings;
 
             try
@@ -151,7 +161,10 @@ namespace ModelBox
                     var drawSettings = CreateDrawingSettings(
                         _shaderTags,
                         ref renderingData,
-                        renderingData.cameraData.defaultOpaqueSortFlags
+                        // [fix v0.6] 透明队列使用透明排序（从后往前），与 URP 透明 Pass 一致
+                        _drawTransparentQueue
+                            ? SortingCriteria.CommonTransparent
+                            : renderingData.cameraData.defaultOpaqueSortFlags
                     );
                     drawSettings.overrideMaterial = _overrideMaterial;
                     drawSettings.overrideMaterialPassIndex = 0;

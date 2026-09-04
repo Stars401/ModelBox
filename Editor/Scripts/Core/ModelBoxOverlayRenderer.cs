@@ -202,6 +202,69 @@ namespace ModelBox
             }
         }
 
+        // [feat v0.6] 局部坐标轴常量与样式缓存（避免每帧 GUIStyle 分配）
+        private static readonly Color[] AxisLineColors =
+        {
+            new Color(1f, 0.3f, 0.3f, 1f),   // X 红
+            new Color(0.3f, 1f, 0.4f, 1f),   // Y 绿
+            new Color(0.35f, 0.6f, 1f, 1f),  // Z 蓝
+        };
+        private static readonly string[] AxisLabels = { "X", "Y", "Z" };
+        private static GUIStyle[] _axisLabelStyles;
+
+        /// <summary>
+        /// [feat v0.6] 绘制模型局部坐标三向轴：模型原点出发的 X/Y/Z 轴（红/绿/蓝），
+        /// 含抗锯齿轴线、圆锥箭头与轴标签，帮助开发者快速分辨模型局部坐标系朝向。
+        /// 深度测试遵循与其他叠加一致的 OverlayDepthTest 设置；绘制时保存/恢复 Handles 状态。
+        /// </summary>
+        /// <param name="origin">模型原点（选中物体 transform.position）</param>
+        /// <param name="rotation">局部坐标系旋转（transform.rotation；轴方向不受缩放影响）</param>
+        /// <param name="length">轴长（调用方按模型包围盒自适应计算）</param>
+        /// <param name="depthTest">是否被模型遮挡（false=透视显示）</param>
+        public static void DrawLocalAxes(Vector3 origin, Quaternion rotation, float length, bool depthTest = true)
+        {
+            if (length <= 0f) return;
+
+            var prevColor = Handles.color;
+            var prevMatrix = Handles.matrix;
+            var prevZTest = Handles.zTest;
+
+            // 轴以世界空间原点绘制（传入的世界空间 origin/rotation 已含变换），不受 Handles.matrix 影响
+            Handles.matrix = Matrix4x4.identity;
+            Handles.zTest = depthTest ? CompareFunction.LessEqual : CompareFunction.Always;
+
+            // 标签样式懒初始化（每轴独立颜色，便于快速辨认朝向）
+            if (_axisLabelStyles == null)
+            {
+                _axisLabelStyles = new GUIStyle[3];
+                for (int i = 0; i < 3; i++)
+                {
+                    _axisLabelStyles[i] = new GUIStyle(EditorStyles.boldLabel) { fontSize = 13 };
+                    _axisLabelStyles[i].normal.textColor = AxisLineColors[i];
+                }
+            }
+
+            Vector3[] dirs = { Vector3.right, Vector3.up, Vector3.forward };
+            float arrowSize = Mathf.Max(length * 0.12f, 0.005f);
+
+            for (int i = 0; i < 3; i++)
+            {
+                Vector3 dir = rotation * dirs[i];
+                Vector3 tip = origin + dir * length;
+
+                Handles.color = AxisLineColors[i];
+                Handles.DrawAAPolyLine(2f, origin, tip);
+                // 圆锥箭头：锥底位于轴末端、指向轴方向，与轴线衔接为完整箭头
+                Handles.ConeHandleCap(0, tip, Quaternion.LookRotation(dir), arrowSize, EventType.Repaint);
+                Handles.Label(tip + dir * (arrowSize * 1.6f), AxisLabels[i], _axisLabelStyles[i]);
+            }
+
+            // 恢复 Handles 状态，避免影响后续 Handles 绘制
+            Handles.color = prevColor;
+            Handles.matrix = prevMatrix;
+            Handles.zTest = prevZTest;
+        }
+
         /// <summary>
         /// GPU 实例化绘制顶点球体（Graphics.DrawMeshInstanced）。
         /// </summary>
@@ -281,13 +344,16 @@ namespace ModelBox
         private static Material _boneWeightSurfaceMat;
         private static Mesh _boneWeightTempMesh;
         private static int _boneWeightTempMeshHash;
+        // [perf] 跟踪权重数组引用，仅在骨骼选择变化时重建顶点颜色
+        private static float[] _lastSurfaceWeights;
 
         /// <summary>
         /// Maya-style 骨骼权重表面渲染：将权重映射为顶点颜色，渲染整个网格表面。
         /// 使用临时 Mesh 副本（设置顶点颜色），配合 unlit vertex-color 材质。
         /// </summary>
         public static void DrawBoneWeightSurface(CachedMeshData data, Matrix4x4 localToWorld,
-            float[] vertexWeights, Camera camera, Bounds worldBounds, bool depthTest = true)
+            float[] vertexWeights, Camera camera, Bounds worldBounds, bool depthTest = true,
+            float opacity = 1.0f)
         {
             if (data == null || data.Vertices == null || data.Vertices.Length == 0) return;
             if (vertexWeights == null || vertexWeights.Length != data.Vertices.Length) return;
@@ -296,17 +362,16 @@ namespace ModelBox
 
             var mat = GetBoneWeightSurfaceMaterial(depthTest);
             if (mat == null) return;
+            mat.SetFloat("_Opacity", opacity);
 
-            // 顶点颜色：权重 → 热力图颜色（蓝→绿→红）
+            // 顶点颜色：权重 → 热力图颜色（仅在骨骼选择变化时重建）
             int vertCount = data.Vertices.Length;
             if (_weightColorBuffer == null || _weightColorBuffer.Length < vertCount)
                 _weightColorBuffer = new Color[Mathf.Max(vertCount, 256)];
 
-            for (int i = 0; i < vertCount; i++)
-                _weightColorBuffer[i] = WeightToHeatmap(vertexWeights[i]);
-
             // 创建/复用临时 Mesh（仅在源 Mesh 变化时重建）
             int hash = vertCount ^ (data.TriangleIndices?.GetHashCode() ?? 0);
+            bool meshRebuilt = false;
             if (_boneWeightTempMesh == null || _boneWeightTempMeshHash != hash)
             {
                 if (_boneWeightTempMesh != null) Object.DestroyImmediate(_boneWeightTempMesh);
@@ -315,10 +380,17 @@ namespace ModelBox
                 _boneWeightTempMesh.SetTriangles(data.TriangleIndices, 0);
                 _boneWeightTempMesh.RecalculateBounds();
                 _boneWeightTempMeshHash = hash;
+                meshRebuilt = true;
             }
 
-            // 更新顶点颜色（每帧更新，因为权重可能随骨骼选择变化）
-            _boneWeightTempMesh.SetColors(_weightColorBuffer, 0, vertCount);
+            // [perf] 仅在权重数组变化或 Mesh 重建时更新顶点颜色（避免每帧上传）
+            if (meshRebuilt || !ReferenceEquals(_lastSurfaceWeights, vertexWeights))
+            {
+                _lastSurfaceWeights = vertexWeights;
+                for (int i = 0; i < vertCount; i++)
+                    _weightColorBuffer[i] = WeightToHeatmap(vertexWeights[i]);
+                _boneWeightTempMesh.SetColors(_weightColorBuffer, 0, vertCount);
+            }
 
             // 渲染：使用 Graphics.DrawMesh 渲染到指定相机
             Graphics.DrawMesh(_boneWeightTempMesh, localToWorld, mat, 0, camera);
@@ -578,6 +650,7 @@ namespace ModelBox
             if (_boneWeightSurfaceMat != null) { Object.DestroyImmediate(_boneWeightSurfaceMat); _boneWeightSurfaceMat = null; }
             if (_boneWeightTempMesh != null) { Object.DestroyImmediate(_boneWeightTempMesh); _boneWeightTempMesh = null; }
             _boneWeightTempMeshHash = 0;
+            _lastSurfaceWeights = null;
             _instanceMatrices = null;
             _batchMatrices = null;
             _sharedMPB = null;
@@ -590,6 +663,7 @@ namespace ModelBox
             _directionLinesBuffer = null;
             _directionIndicesBuffer = null;
             _boundsPointsBuffer = null;
+            _axisLabelStyles = null; // [feat v0.6] 局部坐标轴标签样式缓存
             _bakedCache = null;
             _bakedSourceMesh = null;
             _bakeVertBuf.Clear();

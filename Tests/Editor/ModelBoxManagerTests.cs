@@ -80,7 +80,11 @@ namespace ModelBox.Tests
             Assert.AreEqual(DebugViewCategory.Geometry, manager.GetModeCategory(DebugViewMode.LocalNormal));
             Assert.AreEqual(DebugViewCategory.Geometry, manager.GetModeCategory(DebugViewMode.UV0));
             Assert.AreEqual(DebugViewCategory.Geometry, manager.GetModeCategory(DebugViewMode.VertexColor));
-            Assert.AreEqual(DebugViewCategory.Geometry, manager.GetModeCategory(DebugViewMode.Depth));
+            // [fix v0.6] Depth 已迁移至 ScreenSpace 路径（从深度缓冲重建，见 ModelBoxRendererFeature.needsScreenSpace）。
+            // 旧断言 Geometry 为迁移遗留 — 该测试此前必然失败（本机无 Unity 宿主项目故未暴露）。
+            Assert.AreEqual(DebugViewCategory.ScreenSpace, manager.GetModeCategory(DebugViewMode.Depth));
+            Assert.AreEqual(DebugViewCategory.ScreenSpace, manager.GetModeCategory(DebugViewMode.ScreenNormal));
+            Assert.AreEqual(DebugViewCategory.ScreenSpace, manager.GetModeCategory(DebugViewMode.RayMarch));
         }
 
         [Test]

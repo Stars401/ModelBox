@@ -12,7 +12,7 @@ namespace ModelBox
     public class ModelBoxSelectionInspector
     {
         private int _selectedTab;
-        private readonly string[] _tabNames = { "贴图通道", "UV 棋盘格", "Shader 属性", "网格叠加" };
+        private readonly string[] _tabNames = { "贴图通道", "UV 棋盘格", "Shader 属性", "顶点颜色", "网格叠加" };
 
         // [perf P4] 缓存字符串数组，避免每帧分配
         private static readonly string[] _uvChannelOptions = { "UV0", "UV1", "UV2", "UV3" };
@@ -28,6 +28,7 @@ namespace ModelBox
         private float _clampMin = 0f; // 亮度钳制下限
         private float _clampMax = 1f; // 亮度钳制上限
         private bool _textureChannelActive;
+        private bool _monoDisplay; // [feat] 单色（灰度）显示通道值
 
         // Checkerboard
         private float _gridSize = 10f;
@@ -40,6 +41,10 @@ namespace ModelBox
         private Color _propertyColor;
         private bool _shaderPropertyActive;
         private Vector2 _propertyScrollPos;
+
+        // Vertex Color
+        private int _vcChannel = 0; // 0=RGB, 1=R, 2=G, 3=B, 4=A
+        private bool _vertexColorActive;
 
         // 缓存属性列表
         private Shader _cachedShader;
@@ -61,6 +66,7 @@ namespace ModelBox
             _textureChannelActive = (manager.CurrentMode == SelectionDebugMode.TextureChannel);
             _checkerboardActive = (manager.CurrentMode == SelectionDebugMode.Checkerboard);
             _shaderPropertyActive = (manager.CurrentMode == SelectionDebugMode.ShaderProperty);
+            _vertexColorActive = (manager.CurrentMode == SelectionDebugMode.VertexColor);
 
             _selectedTab = GUILayout.Toolbar(_selectedTab, _tabNames);
 
@@ -74,7 +80,8 @@ namespace ModelBox
                 case 0: DrawTextureChannel(manager); break;
                 case 1: DrawCheckerboard(manager); break;
                 case 2: DrawShaderProperty(manager); break;
-                case 3: DrawMeshOverlaySection(manager); break;
+                case 3: DrawVertexColor(manager); break;
+                case 4: DrawMeshOverlaySection(manager); break;
             }
 
             EditorGUILayout.Space(8);
@@ -86,6 +93,7 @@ namespace ModelBox
                 _textureChannelActive = false;
                 _checkerboardActive = false;
                 _shaderPropertyActive = false;
+                _vertexColorActive = false;
                 manager.RestoreOriginalMaterials();
                 manager.SetMode(SelectionDebugMode.None);
             }
@@ -131,12 +139,17 @@ namespace ModelBox
             int newChannelMask = GUILayout.SelectionGrid(_channelMask,
                 _channelOptions, 5);
 
+            // [feat] 单色显示：单通道以灰度呈现，避免红/蓝色调影响数值观察
+            bool newMono = EditorGUILayout.Toggle(
+                new GUIContent("单色（灰度）显示", "单通道以灰度呈现，避免红/蓝色调影响数值观察。\nRGB 模式下显示亮度（Luminance）。"),
+                _monoDisplay);
+
             // 亮度范围钳制（Lightness Map / Ramp Mask 调试）
             EditorGUILayout.Space(4);
             EditorGUILayout.LabelField("亮度范围钳制", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "只显示指定数值范围内的区域。用于 Lightness Map / Ramp Mask 调试。\n" +
-                "范围外显示为暗色，精确定位 shader 中 step() 的阈值边界。",
+                "隔离指定数值范围的区域，并将范围内数值重映射到 0~1（窄带拉伸，放大细微差异便于观察）。\n" +
+                "用于 Lightness Map / Ramp Mask 调试；范围外显示为暗色。",
                 MessageType.None);
             EditorGUI.BeginChangeCheck();
             _clampMin = EditorGUILayout.Slider("Min", _clampMin, 0f, 1f);
@@ -151,6 +164,7 @@ namespace ModelBox
                 {
                     _textureChannelActive = true;
                     _channelMask = newChannelMask; // [M3-2 fix] 使用最新选择
+                    _monoDisplay = newMono;
                     manager.CustomTexture = _customTexture;
                     manager.ChannelMask = _channelMask;
                     manager.UVChannel = _uvChannel;
@@ -160,20 +174,24 @@ namespace ModelBox
                     manager.WorldUVScale = _worldUVScale;
                     manager.ClampMin = _clampMin;
                     manager.ClampMax = _clampMax;
+                    manager.MonoDisplay = newMono;
                     manager.SetMode(SelectionDebugMode.TextureChannel);
                 }
             }
             else
             {
                 // 实时更新：参数变化时立即推送（包括自定义贴图和 UV 通道变化）
+                bool textureChanged = _customTexture != manager.CustomTexture;
                 bool needUpdate = transformChanged || newChannelMask != _channelMask
                     || newWorldUV != manager.WorldSpaceUV || clampChanged
                     || _worldUVScale != manager.WorldUVScale
-                    || _customTexture != manager.CustomTexture
-                    || _uvChannel != manager.UVChannel;
+                    || textureChanged
+                    || _uvChannel != manager.UVChannel
+                    || newMono != _monoDisplay;
                 if (needUpdate)
                 {
                     _channelMask = newChannelMask;
+                    _monoDisplay = newMono;
                     manager.CustomTexture = _customTexture;
                     manager.ChannelMask = _channelMask;
                     manager.UVChannel = _uvChannel;
@@ -183,7 +201,12 @@ namespace ModelBox
                     manager.WorldUVScale = _worldUVScale;
                     manager.ClampMin = _clampMin;
                     manager.ClampMax = _clampMax;
-                    manager.UpdateTextureChannelProperties();
+                    manager.MonoDisplay = newMono;
+                    // [fix] 贴图变更需重读源材质贴图（Update*Properties 不处理贴图），其余参数直接推送
+                    if (textureChanged)
+                        manager.RefreshDebugMaterial();
+                    else
+                        manager.UpdateTextureChannelProperties();
                 }
                 else
                 {
@@ -407,6 +430,82 @@ namespace ModelBox
             EditorGUILayout.EndHorizontal();
         }
 
+        // [feat] 顶点颜色可视化：显示 mesh 内置 COLOR 数据
+        private void DrawVertexColor(ModelBoxSelectionManager manager)
+        {
+            EditorGUILayout.LabelField("顶点颜色", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("在选中物体上显示 mesh 内置的顶点颜色数据，检查 DCC 导入的顶点色烘焙（AO/ID/遮罩）。", EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.Space(4);
+
+            if (Selection.activeTransform == null)
+            {
+                EditorGUILayout.HelpBox("请先在 Scene 中选中一个物体。", MessageType.Info);
+                return;
+            }
+
+            // mesh 顶点色数据检测提示
+            var mesh = GetSelectedMesh();
+            if (mesh == null)
+            {
+                EditorGUILayout.HelpBox("选中物体没有 Mesh（需要 MeshRenderer 或 SkinnedMeshRenderer）。", MessageType.Warning);
+                return;
+            }
+
+            if (!mesh.HasVertexAttribute(VertexAttribute.Color))
+                EditorGUILayout.HelpBox("当前 mesh 没有顶点颜色数据 — 显示结果无意义（平台差异可能显示黑/白）。", MessageType.Warning);
+
+            EditorGUILayout.Space(2);
+            int newChannel = GUILayout.SelectionGrid(_vcChannel, _channelOptions, 5);
+
+            if (!_vertexColorActive)
+            {
+                if (GUILayout.Button("应用顶点颜色", GUILayout.Height(28)))
+                {
+                    _vertexColorActive = true;
+                    _vcChannel = newChannel;
+                    manager.VertexColorChannel = _vcChannel;
+                    manager.SetMode(SelectionDebugMode.VertexColor);
+                }
+            }
+            else
+            {
+                // 实时更新：通道变化时立即推送
+                if (newChannel != _vcChannel)
+                {
+                    _vcChannel = newChannel;
+                    manager.VertexColorChannel = _vcChannel;
+                    manager.UpdateVertexColorProperties();
+                }
+                else
+                {
+                    _vcChannel = newChannel;
+                }
+
+                if (GUILayout.Button("关闭顶点颜色", GUILayout.Height(28)))
+                {
+                    _vertexColorActive = false;
+                    manager.RestoreOriginalMaterials();
+                    manager.SetMode(SelectionDebugMode.None);
+                }
+            }
+        }
+
+        /// <summary>获取选中物体的 Mesh（MeshRenderer 优先，其次 SkinnedMeshRenderer）。</summary>
+        private static Mesh GetSelectedMesh()
+        {
+            var selected = Selection.activeTransform;
+            if (selected == null) return null;
+
+            var mr = selected.GetComponentInChildren<MeshRenderer>();
+            if (mr != null)
+                return mr.GetComponent<MeshFilter>()?.sharedMesh;
+
+            var smr = selected.GetComponentInChildren<SkinnedMeshRenderer>();
+            if (smr != null) return smr.sharedMesh;
+
+            return null;
+        }
+
         private void DrawMeshOverlaySection(ModelBoxSelectionManager manager)
         {
             EditorGUILayout.LabelField("网格叠加", EditorStyles.boldLabel);
@@ -423,6 +522,7 @@ namespace ModelBox
             bool norm = (flags & MeshOverlayFlags.Normals) != 0;
             bool tan = (flags & MeshOverlayFlags.Tangents) != 0;
             bool bnd = (flags & MeshOverlayFlags.Bounds) != 0;
+            bool axes = (flags & MeshOverlayFlags.LocalAxes) != 0; // [feat v0.6]
 
             // 开关按钮行（带激活颜色高亮）
             EditorGUILayout.BeginHorizontal();
@@ -431,6 +531,8 @@ namespace ModelBox
             DrawOverlayToggle(" 法线 ", ref flags, MeshOverlayFlags.Normals, norm);
             DrawOverlayToggle(" 切线 ", ref flags, MeshOverlayFlags.Tangents, tan);
             DrawOverlayToggle(" AABB ", ref flags, MeshOverlayFlags.Bounds, bnd);
+            // [feat v0.6] 模型局部坐标：模型原点三向轴
+            DrawOverlayToggle(" 局部坐标 ", ref flags, MeshOverlayFlags.LocalAxes, axes);
             EditorGUILayout.EndHorizontal();
 
             if (flags != manager.OverlayFlags)
@@ -506,26 +608,21 @@ namespace ModelBox
                 if (EditorGUI.EndChangeCheck()) EditorApplication.delayCall += () => SceneView.RepaintAll();
                 EditorGUI.indentLevel--;
             }
+
+            // [feat v0.6] 局部坐标轴设置（轴长 = 选中层级合并包围盒对角线 × 系数）
+            if (axes)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUI.BeginChangeCheck();
+                manager.LocalAxesLength = EditorGUILayout.Slider("局部坐标轴长度", manager.LocalAxesLength, 0.1f, 2f);
+                if (EditorGUI.EndChangeCheck()) EditorApplication.delayCall += () => SceneView.RepaintAll();
+                EditorGUI.indentLevel--;
+            }
         }
 
         private void DrawMeshStats()
         {
-            var selected = Selection.activeTransform;
-            if (selected == null) return;
-
-            Mesh mesh = null;
-            var mr = selected.GetComponentInChildren<MeshRenderer>();
-            if (mr != null)
-            {
-                var mf = mr.GetComponent<MeshFilter>();
-                if (mf != null) mesh = mf.sharedMesh;
-            }
-            else
-            {
-                var smr = selected.GetComponentInChildren<SkinnedMeshRenderer>();
-                if (smr != null) mesh = smr.sharedMesh;
-            }
-
+            var mesh = GetSelectedMesh();
             if (mesh == null) return;
 
             int verts = mesh.vertexCount;

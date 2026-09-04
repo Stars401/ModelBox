@@ -3,15 +3,18 @@ Shader "Hidden/ModelBox/BoneWeight"
     Properties
     {
         _ZTest("ZTest", Int) = 4
+        _Opacity("Opacity", Range(0, 1)) = 1.0
     }
 
     SubShader
     {
-        Tags { "RenderType" = "Opaque" "Queue" = "Geometry+1" }
+        Tags { "RenderType" = "Transparent" "Queue" = "Geometry+1" }
         LOD 100
         Cull Off
         ZWrite Off
         ZTest [_ZTest]
+        Offset -1, -1
+        Blend SrcAlpha OneMinusSrcAlpha
 
         Pass
         {
@@ -20,6 +23,10 @@ Shader "Hidden/ModelBox/BoneWeight"
             #pragma fragment frag
             #pragma target 3.5
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+
+            CBUFFER_START(UnityPerMaterial)
+                float _Opacity;
+            CBUFFER_END
 
             struct Attributes
             {
@@ -43,7 +50,7 @@ Shader "Hidden/ModelBox/BoneWeight"
 
             half4 frag(Varyings input) : SV_Target
             {
-                return half4(input.color.rgb, 1.0);
+                return half4(input.color.rgb, input.color.a * _Opacity);
             }
             ENDHLSL
         }
@@ -51,11 +58,13 @@ Shader "Hidden/ModelBox/BoneWeight"
 
     SubShader
     {
-        Tags { "RenderType" = "Opaque" "Queue" = "Geometry+1" }
+        Tags { "RenderType" = "Transparent" "Queue" = "Geometry+1" }
         LOD 100
         Cull Off
         ZWrite Off
         ZTest [_ZTest]
+        Offset -1, -1
+        Blend SrcAlpha OneMinusSrcAlpha
 
         Pass
         {
@@ -64,6 +73,8 @@ Shader "Hidden/ModelBox/BoneWeight"
             #pragma fragment frag
             #pragma target 3.5
             #include "UnityCG.cginc"
+
+            uniform float _Opacity;
 
             struct appdata
             {
@@ -87,7 +98,7 @@ Shader "Hidden/ModelBox/BoneWeight"
 
             half4 frag(v2f i) : SV_Target
             {
-                return half4(i.color.rgb, 1.0);
+                return half4(i.color.rgb, i.color.a * _Opacity);
             }
             ENDCG
         }
