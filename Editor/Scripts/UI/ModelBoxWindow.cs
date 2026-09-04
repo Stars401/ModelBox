@@ -460,30 +460,43 @@ namespace ModelBox
 
             EditorGUILayout.LabelField($"名称: {selected.gameObject.name}", EditorStyles.boldLabel);
 
-            // Shader name
+            // Shader 名：选区调试激活时 sharedMaterial 已被调试材质替换，
+            // 经 GetOriginalMaterial 回读原始材质，保证显示的是物体真实 Shader
             var renderer = selected.GetComponentInChildren<Renderer>();
-            if (renderer != null && renderer.sharedMaterial != null)
+            if (renderer != null)
             {
-                var shader = renderer.sharedMaterial.shader;
-                string shaderName = shader != null ? shader.name : "(none)";
-                EditorGUILayout.LabelField($"Shader: {shaderName}", EditorStyles.miniLabel);
+                var selMgr = ModelBoxSelectionManager.Instance;
+                var displayMat = selMgr != null
+                    ? selMgr.GetOriginalMaterial(renderer)
+                    : renderer.sharedMaterial;
+                if (displayMat != null && displayMat.shader != null)
+                    EditorGUILayout.LabelField($"Shader: {displayMat.shader.name}", EditorStyles.miniLabel);
             }
 
-            // Mesh stats
-            var meshFilter = selected.GetComponentInChildren<MeshFilter>();
-            var skinRenderer = selected.GetComponentInChildren<SkinnedMeshRenderer>();
-            Mesh mesh = null;
-            if (meshFilter != null) mesh = meshFilter.sharedMesh;
-            else if (skinRenderer != null) mesh = skinRenderer.sharedMesh;
-
-            if (mesh != null)
+            // Mesh 统计：聚合选中层级所有激活 Renderer（排除未激活物体与 LOD 非活跃级别），
+            // 多部件模型显示总量而非首个网格 — 保证统计与实际渲染内容一致
+            long totalVerts = 0, totalTris = 0;
+            int totalSubMeshes = 0, meshCount = 0;
+            foreach (var r in selected.GetComponentsInChildren<Renderer>())
             {
-                int triCount = 0;
-                for (int si = 0; si < mesh.subMeshCount; si++)
-                    triCount += (int)(mesh.GetIndexCount(si) / 3);
-                EditorGUILayout.LabelField(
-                    $"Mesh: {mesh.vertexCount:N0} 顶点, {triCount:N0} 三角面, {mesh.subMeshCount} 子网格",
-                    EditorStyles.miniLabel);
+                if (r == null || !r.enabled || !r.gameObject.activeInHierarchy) continue;
+                Mesh m = null;
+                if (r is MeshRenderer mr) m = mr.GetComponent<MeshFilter>()?.sharedMesh;
+                else if (r is SkinnedMeshRenderer smr) m = smr.sharedMesh;
+                if (m == null) continue;
+                meshCount++;
+                totalVerts += m.vertexCount;
+                totalSubMeshes += m.subMeshCount;
+                for (int si = 0; si < m.subMeshCount; si++)
+                    totalTris += m.GetIndexCount(si) / 3;
+            }
+
+            if (meshCount > 0)
+            {
+                string meshLabel = meshCount > 1
+                    ? $"Mesh: {totalVerts:N0} 顶点, {totalTris:N0} 三角面, {totalSubMeshes} 子网格（{meshCount} 个网格聚合）"
+                    : $"Mesh: {totalVerts:N0} 顶点, {totalTris:N0} 三角面, {totalSubMeshes} 子网格";
+                EditorGUILayout.LabelField(meshLabel, EditorStyles.miniLabel);
 
                 // 快速叠加开关
                 var selManager = ModelBoxSelectionManager.Instance;

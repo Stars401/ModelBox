@@ -622,18 +622,28 @@ namespace ModelBox
 
         private void DrawMeshStats()
         {
-            var mesh = GetSelectedMesh();
-            if (mesh == null) return;
+            var selected = Selection.activeTransform;
+            if (selected == null) return;
 
-            int verts = mesh.vertexCount;
-            // [M3-1 fix] mesh.GetIndexCount 不分配内存（mesh.triangles 会分配 int[]）
-            int tris = 0;
-            for (int si = 0; si < mesh.subMeshCount; si++)
-                tris += (int)(mesh.GetIndexCount(si) / 3);
-            string label = $"顶点: {verts:N0}  三角面: {tris:N0}";
+            // [fix v0.6] 聚合选中层级所有激活 Renderer（排除 LOD 非活跃级别），
+            // 多部件模型显示总量而非首个网格 — 与检查页统计口径一致
+            long totalVerts = 0, totalTris = 0;
+            foreach (var r in selected.GetComponentsInChildren<Renderer>())
+            {
+                if (r == null || !r.enabled || !r.gameObject.activeInHierarchy) continue;
+                Mesh m = null;
+                if (r is MeshRenderer mr) m = mr.GetComponent<MeshFilter>()?.sharedMesh;
+                else if (r is SkinnedMeshRenderer smr) m = smr.sharedMesh;
+                if (m == null) continue;
+                totalVerts += m.vertexCount;
+                // [M3-1 fix] mesh.GetIndexCount 不分配内存（mesh.triangles 会分配 int[]）
+                for (int si = 0; si < m.subMeshCount; si++)
+                    totalTris += m.GetIndexCount(si) / 3;
+            }
+            string label = $"顶点: {totalVerts:N0}  三角面: {totalTris:N0}";
 
             // 高面数警告
-            if (verts > 50000)
+            if (totalVerts > 50000)
             {
                 var prevColor = GUI.color;
                 GUI.color = new Color(1f, 0.7f, 0.3f);

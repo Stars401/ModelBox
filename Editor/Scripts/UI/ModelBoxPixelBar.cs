@@ -708,9 +708,15 @@ namespace ModelBox
         {
             if (!ShowCustomProp || string.IsNullOrEmpty(CustomPropName)) return;
 
-            if (hitRenderer != null && hitRenderer.sharedMaterial != null)
+            // [fix v0.6] 选区调试激活时 sharedMaterial 已被调试材质替换，
+            // 自定义属性必须回读原始材质（调试材质无业务属性，读出的是误导值）
+            var selMgr = ModelBoxSelectionManager.Instance;
+            var mat = (hitRenderer != null && selMgr != null)
+                ? selMgr.GetOriginalMaterial(hitRenderer)
+                : (hitRenderer != null ? hitRenderer.sharedMaterial : null);
+
+            if (hitRenderer != null && mat != null)
             {
-                var mat = hitRenderer.sharedMaterial;
                 // [fix v0.4.1] shader 可能为 null（材质引用了已删除的 shader）
                 var shader = mat.shader;
                 if (shader == null) { _customPropValue = "[无Shader]"; return; }
