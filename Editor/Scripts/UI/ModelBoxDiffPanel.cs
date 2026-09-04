@@ -73,6 +73,62 @@ namespace ModelBox
         private int _activeSlotIndex = 0;   // 当前编辑的材质槽索引
         private bool _isPreviewing;
 
+        // [fix v0.6.x] 材质候选：跨 Renderer 聚合 + 按材质实例去重
+        private struct MaterialCandidate
+        {
+            public Renderer Renderer;
+            public int Slot;
+            public Material Material;
+            public int RefCount;       // 该材质实例被引用的槽位总数
+            public string FirstSource; // 首个来源描述（物体名[槽i]）
+        }
+        private readonly List<MaterialCandidate> _candidates = new List<MaterialCandidate>();
+        private readonly Dictionary<Material, int> _candidateIndexByMat = new Dictionary<Material, int>();
+
+        /// <summary>
+        /// [fix v0.6.x] 遍历选中层级所有激活 Renderer 的全部材质槽，
+        /// 按材质实例去重聚合为候选（同一材质占多槽位/被多 Renderer 引用只列一次并计数）。
+        /// 旧逻辑只取 GetComponentInChildren 第一个 Renderer 的槽位 —— 多部件模型只能看到
+        /// 首个 Renderer 的材质，且同实例多槽位按槽位重复列出（用户实测的重复候选 bug）。
+        /// </summary>
+        private void RebuildCandidates(Transform selected)
+        {
+            _candidates.Clear();
+            _candidateIndexByMat.Clear();
+
+            foreach (var rend in selected.GetComponentsInChildren<Renderer>())
+            {
+                if (rend == null || !rend.enabled || !rend.gameObject.activeInHierarchy) continue;
+                Material[] mats;
+                try { mats = rend.sharedMaterials; }
+                catch { continue; /* Renderer 可能已被销毁 */ }
+
+                for (int i = 0; i < mats.Length; i++)
+                {
+                    var m = mats[i];
+                    if (m == null) continue;
+                    if (_candidateIndexByMat.TryGetValue(m, out int idx))
+                    {
+                        var c = _candidates[idx];
+                        c.RefCount++;
+                        _candidates[idx] = c;
+                    }
+                    else
+                    {
+                        _candidateIndexByMat[m] = _candidates.Count;
+                        _candidates.Add(new MaterialCandidate
+                        {
+                            Renderer = rend,
+                            Slot = i,
+                            Material = m,
+                            RefCount = 1,
+                            FirstSource = $"{rend.gameObject.name}[{i}]"
+                        });
+                    }
+                }
+            }
+        }
+
         private int _diffCount;
         private int _totalCount;
         private bool _showOnlyDifferences = false;
@@ -131,30 +187,33 @@ namespace ModelBox
                 return;
             }
 
-            // [fix] 使用 GetComponentInChildren 支持父物体选中（如角色根节点）
-            var renderer = selected.GetComponentInChildren<Renderer>();
-            if (renderer == null)
+            // [fix v0.6.x] 遍历选中层级所有激活 Renderer 聚合材质候选（按材质实例去重），
+            // 不再只取第一个 Renderer 的槽位
+            RebuildCandidates(selected);
+            if (_candidates.Count == 0)
             {
-                DrawEmptyState("选中物体及其子级没有 Renderer 组件。");
+                DrawEmptyState("选中物体及其子级没有可用材质。");
                 return;
             }
 
-            var materials = renderer.sharedMaterials;
-            if (materials.Length == 0)
+            // 校验当前候选仍有效（选中变化 / 槽位材质变化后回退到首个候选）
+            bool currentValid = false;
+            foreach (var cand in _candidates)
             {
-                DrawEmptyState("Renderer 没有材质槽。");
-                return;
+                if (cand.Renderer == _targetRenderer && cand.Slot == _activeSlotIndex)
+                {
+                    currentValid = true;
+                    break;
+                }
+            }
+            if (!currentValid)
+            {
+                _targetRenderer = _candidates[0].Renderer;
+                _activeSlotIndex = _candidates[0].Slot;
             }
 
-            // 检测物体切换
-            if (renderer != _targetRenderer)
-            {
-                _targetRenderer = renderer;
-                _activeSlotIndex = 0;
-            }
-
-            DrawHeaderDirect(renderer, materials);
-            DrawStartSection(renderer, materials);
+            DrawCandidateSelector(_candidates);
+            DrawStartSection();
         }
 
         // ===================== 头部 =====================
@@ -202,8 +261,8 @@ namespace ModelBox
             EditorGUILayout.Space(4);
         }
 
-        /// <summary>沙盒未活跃时的头部（显示材质槽选择器）。</summary>
-        private void DrawHeaderDirect(Renderer renderer, Material[] materials)
+        /// <summary>沙盒未活跃时的头部（显示跨 Renderer 聚合去重后的材质候选）。</summary>
+        private void DrawCandidateSelector(List<MaterialCandidate> candidates)
         {
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField("材质沙盒", EditorStyles.boldLabel);
@@ -212,9 +271,8 @@ namespace ModelBox
 
             var pc = GUI.contentColor;
             GUI.contentColor = new Color(0.7f, 0.7f, 0.7f);
-            string objName = renderer != null ? renderer.gameObject.name : "-";
             EditorGUILayout.LabelField(
-                $"物体: {objName}  |  {materials.Length} 个材质槽",
+                $"选中层级: {candidates.Count} 个材质（{SlotRefCount(candidates)} 个槽位引用，已按实例去重）",
                 EditorStyles.miniLabel);
             GUI.contentColor = pc;
 
@@ -222,33 +280,48 @@ namespace ModelBox
             EditorGUI.DrawRect(rect, ModelBoxStyles.SeparatorColor);
             EditorGUILayout.Space(4);
 
-            // 材质槽选择器（多槽时显示）
-            if (materials.Length > 1)
+            // 材质候选列表：按材质实例去重，多槽/多 Renderer 引用同一材质只出现一次并标注引用数
+            EditorGUILayout.LabelField("选择材质：", EditorStyles.boldLabel);
+            foreach (var cand in candidates)
             {
-                EditorGUILayout.LabelField("选择材质槽：", EditorStyles.boldLabel);
-                for (int i = 0; i < materials.Length; i++)
-                {
-                    bool isActive = (i == _activeSlotIndex);
-                    var prevBg = GUI.backgroundColor;
-                    if (isActive) GUI.backgroundColor = ModelBoxStyles.GetActiveButtonColor();
+                bool isActive = (cand.Renderer == _targetRenderer && cand.Slot == _activeSlotIndex);
+                var prevBg = GUI.backgroundColor;
+                if (isActive) GUI.backgroundColor = ModelBoxStyles.GetActiveButtonColor();
 
-                    string matName = materials[i] != null ? materials[i].name : "(空)";
-                    string shaderName = materials[i] != null && materials[i].shader != null
-                        ? materials[i].shader.name : "Unknown";
-                    if (GUILayout.Button($"[{i}] {matName}  ({shaderName})", EditorStyles.miniButton))
-                    {
-                        _activeSlotIndex = i;
-                    }
-                    GUI.backgroundColor = prevBg;
+                string shaderName = cand.Material.shader != null ? cand.Material.shader.name : "Unknown";
+                string refInfo = cand.RefCount > 1 ? $"  ×{cand.RefCount}引用" : "";
+                if (GUILayout.Button($"{cand.Material.name}  ({shaderName}){refInfo}  — {cand.FirstSource}", EditorStyles.miniButton))
+                {
+                    _targetRenderer = cand.Renderer;
+                    _activeSlotIndex = cand.Slot;
                 }
-                EditorGUILayout.Space(4);
+                GUI.backgroundColor = prevBg;
             }
+            EditorGUILayout.Space(4);
+        }
+
+        /// <summary>统计候选中材质被引用的槽位总数。</summary>
+        private static int SlotRefCount(List<MaterialCandidate> candidates)
+        {
+            int total = 0;
+            foreach (var c in candidates) total += c.RefCount;
+            return total;
         }
 
         // ===================== 未开始 =====================
 
-        private void DrawStartSection(Renderer renderer, Material[] materials)
+        private void DrawStartSection()
         {
+            if (_targetRenderer == null)
+            {
+                DrawEmptyState("请先选择材质。");
+                return;
+            }
+
+            Material[] materials;
+            try { materials = _targetRenderer.sharedMaterials; }
+            catch { DrawEmptyState("Renderer 已不可用。"); return; }
+
             // 获取选中槽位的材质
             if (_activeSlotIndex >= materials.Length) _activeSlotIndex = 0;
             var material = materials[_activeSlotIndex];
@@ -631,18 +704,29 @@ namespace ModelBox
             _allSavedOriginals.Clear();
             CollectAllRenderers(_targetRenderer, _allTargetRenderers);
 
-            // 保存每个 Renderer 的原始材质数组并替换选中槽位
+            // 保存每个 Renderer 的原始材质数组并替换【持有同实例材质】的槽位
+            // [fix v0.6.x] 不再盲目按 slotIndex 替换所有收集到的 Renderer —— LOD 各级别/多部件的
+            // 材质布局可能不同，盲目替换会把 A 材质的克隆错误覆盖到持有 B 材质的槽位；
+            // 按 ReferenceEquals 匹配所有引用该材质实例的槽位（材质级 Diff 语义：该材质的所有
+            // 引用处同步预览），完全不持有该材质的 Renderer 保持原样
             foreach (var rend in _allTargetRenderers)
             {
                 var originals = rend.sharedMaterials;
                 _allSavedOriginals.Add(originals);
 
-                if (slotIndex < originals.Length)
+                var mats = (Material[])originals.Clone();
+                bool replaced = false;
+                for (int i = 0; i < originals.Length; i++)
                 {
-                    var mats = (Material[])originals.Clone();
-                    mats[slotIndex] = _sandboxMaterial;
-                    rend.sharedMaterials = mats;
+                    if (ReferenceEquals(originals[i], original))
+                    {
+                        mats[i] = _sandboxMaterial;
+                        replaced = true;
+                    }
                 }
+                if (!replaced && rend == _targetRenderer && slotIndex < mats.Length)
+                    mats[slotIndex] = _sandboxMaterial; // 防御：主 Renderer 至少替换选中槽位
+                rend.sharedMaterials = mats;
             }
 
             // [fix v0.4.1] _savedOriginals 必须引用原始材质数组，而非替换后的
@@ -693,6 +777,7 @@ namespace ModelBox
             {
                 // [fix v0.4] 开启预览：从 _savedOriginals 克隆（而非 sharedMaterials），
                 // 避免 sharedMaterials getter 返回已替换的数组导致引用混乱
+                // [fix v0.6.x] 按材质实例匹配替换（与 StartSandbox 一致），不再按 slotIndex 盲替
                 for (int i = 0; i < _allTargetRenderers.Count; i++)
                 {
                     var rend = _allTargetRenderers[i];
@@ -701,7 +786,16 @@ namespace ModelBox
                     if (originals == null) continue;
 
                     var mats = (Material[])originals.Clone();
-                    if (_activeSlotIndex < mats.Length)
+                    bool replaced = false;
+                    for (int s = 0; s < originals.Length; s++)
+                    {
+                        if (ReferenceEquals(originals[s], _originalMaterial))
+                        {
+                            mats[s] = _sandboxMaterial;
+                            replaced = true;
+                        }
+                    }
+                    if (!replaced && rend == _targetRenderer && _activeSlotIndex < mats.Length)
                         mats[_activeSlotIndex] = _sandboxMaterial;
                     rend.sharedMaterials = mats;
                 }

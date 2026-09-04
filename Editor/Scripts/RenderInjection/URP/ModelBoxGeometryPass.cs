@@ -17,12 +17,14 @@ namespace ModelBox
     ///     相机颜色（仅 opaque 物体）到临时纹理，供 Draw Pass 采样。
     ///   - Overdraw 模式：Capture Phase — 在 AfterRenderingOpaques+1 用计数 shader
     ///     累加绘制到临时纹理，供 OverdrawHeatmap Draw Pass 采样。
-    /// [fix v0.6] 透明队列覆盖：drawTransparentQueue=true 的实例只绘制 transparent 队列
-    ///   （2500-5000：水面/玻璃/粒子/相机空间 UI），由 Feature 在 AfterRenderingTransparents+2
-    ///   注入 — 在真实透明 Pass 之后用调试材质覆盖，补齐几何调试模式的全场景覆盖
-    ///   （此前 RenderQueueRange.opaque 漏掉所有透明队列物体，保持原样渲染）。
-    ///   调试 shader ZWrite Off，透明队列调试绘制不污染深度缓冲；
-    ///   遮挡关系由 ZTest LEqual 对不透明几何深度判定，排序沿用 CommonTransparent。
+    /// [fix v0.6.2] 最终全量绘制 Pass：drawTransparentQueue=true 的实例过滤 RenderQueueRange(0, int.MaxValue)
+    ///   （全部渲染队列，含自定义队列 >5000），由 Feature 在 AfterRenderingTransparents+2 注入 ——
+    ///   位于所有正常几何绘制（不透明 + 天空盒 + 透明）之后、分屏捕获之前，
+    ///   是渲染队列的最后一个几何绘制 Pass：任何物体的调试效果都不会被后续正常渲染覆盖。
+    ///   调试 shader ZWrite Off，最终全量绘制不污染深度缓冲；
+    ///   遮挡关系由 ZTest LEqual 对正常渲染写入的深度判定，排序沿用 CommonTransparent。
+    ///   drawTransparentQueue=false 的实例仍为 opaque 过滤（供 OpaqueTexture/Overdraw/透明层数
+    ///   Capture 模式复用），几何调试路径只注入最终全量实例。
     /// </summary>
     public class ModelBoxGeometryPass : ScriptableRenderPass
     {
@@ -34,7 +36,7 @@ namespace ModelBox
         private ModelBoxParameters _currentParams;
         private bool _passEnabled;
         private bool _debugOnlySelected; // [feat] SEL 模式：仅对选中物体应用调试效果
-        private readonly bool _drawTransparentQueue; // [fix v0.6] 透明队列实例标志
+        private readonly bool _finalSweep; // [fix v0.6.2] true=最终全量绘制实例（0..int.MaxValue 全队列）；false=opaque 过滤实例（Capture 模式复用）
 
 #if UNITY_2022_1_OR_NEWER
         private RTHandle _cameraColorHandle;
@@ -73,13 +75,15 @@ namespace ModelBox
         /// <summary>分屏模式：正常场景捕获纹理。</summary>
         public RTHandle NormalSceneCaptureTexture => _normalSceneCaptureHandle;
 
-        public ModelBoxGeometryPass(Material overrideMaterial, Material overdrawCountMaterial = null, bool drawTransparentQueue = false)
+        public ModelBoxGeometryPass(Material overrideMaterial, Material overdrawCountMaterial = null, bool finalSweep = false)
         {
             _overrideMaterial = overrideMaterial;
             _overdrawCountMaterial = overdrawCountMaterial;
-            _drawTransparentQueue = drawTransparentQueue;
+            _finalSweep = finalSweep;
+            // [fix v0.6.2] 最终全量实例覆盖全部渲染队列（0..int.MaxValue，含自定义队列 >5000）；
+            // 普通实例保持 opaque 过滤（供 Capture 模式复用）
             _filterSettings = new FilteringSettings(
-                drawTransparentQueue ? RenderQueueRange.transparent : RenderQueueRange.opaque);
+                finalSweep ? new RenderQueueRange(0, int.MaxValue) : RenderQueueRange.opaque);
 
             _shaderTags = new List<ShaderTagId>
             {
@@ -144,11 +148,11 @@ namespace ModelBox
             CommandBuffer cmd = CommandBufferPool.Get("ModelBox");
 
             // [feat] SEL 模式：临时将选中物体分配到专用 Layer，渲染后恢复
-            // [fix v0.6] SEL + 透明队列实例：过滤队列与所属实例保持一致
+            // [fix v0.6.2] SEL + 最终全量实例：过滤队列与所属实例保持一致
             var selectedTransforms = _debugOnlySelected ? GetSelectedHierarchy() : null;
             var originalLayers = _debugOnlySelected ? SaveAndSetLayers(selectedTransforms, SelLayer) : null;
             var filterSettings = _debugOnlySelected
-                ? new FilteringSettings(_drawTransparentQueue ? RenderQueueRange.transparent : RenderQueueRange.opaque, SelLayerMask)
+                ? new FilteringSettings(_finalSweep ? new RenderQueueRange(0, int.MaxValue) : RenderQueueRange.opaque, SelLayerMask)
                 : _filterSettings;
 
             try
@@ -161,8 +165,8 @@ namespace ModelBox
                     var drawSettings = CreateDrawingSettings(
                         _shaderTags,
                         ref renderingData,
-                        // [fix v0.6] 透明队列使用透明排序（从后往前），与 URP 透明 Pass 一致
-                        _drawTransparentQueue
+                        // [fix v0.6.2] 最终全量绘制使用透明排序（从后往前）；遮挡正确性由 ZTest 保证
+                        _finalSweep
                             ? SortingCriteria.CommonTransparent
                             : renderingData.cameraData.defaultOpaqueSortFlags
                     );

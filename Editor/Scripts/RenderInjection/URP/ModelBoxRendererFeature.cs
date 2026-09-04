@@ -17,8 +17,8 @@ namespace ModelBox
     public class ModelBoxRendererFeature : ScriptableRendererFeature
     {
         [System.NonSerialized] public ModelBoxGeometryPass debugPass;
-        // [fix v0.6] 透明队列调试 Pass：几何模式下补齐透明物体（水面/玻璃/粒子/相机空间 UI）的调试覆盖
-        [System.NonSerialized] public ModelBoxGeometryPass debugPassTransparent;
+        // [fix v0.6.2] 最终全量调试 Pass：几何模式下渲染队列的最后一次几何绘制（全队列覆盖，不被正常渲染覆盖）
+        [System.NonSerialized] public ModelBoxGeometryPass debugPassFinal;
         [System.NonSerialized] public ModelBoxOpaqueTextureDrawPass opaqueDrawPass;
         [System.NonSerialized] public ScreenSpaceBlitPass screenSpaceBlitPass;
         [System.NonSerialized] public ModelBoxOverdrawDrawPass overdrawDrawPass;
@@ -125,13 +125,13 @@ namespace ModelBox
                 renderPassEvent = RenderPassEvent.AfterRenderingOpaques
             };
 
-            // [fix v0.6] 透明队列 Geometry Pass：在真实透明物体渲染后（AfterRenderingTransparents+2）
-            // 用 overrideMaterial 覆盖绘制透明队列，确保几何调试模式全场景覆盖。
+            // [fix v0.6.2] 最终全量 Geometry Pass：覆盖全部渲染队列（0..int.MaxValue），
+            // 在所有正常几何绘制完成后（AfterRenderingTransparents+2）用 overrideMaterial 做渲染队列
+            // 最后一次几何绘制 —— 调试效果不可能被任何后续正常渲染覆盖（含自定义队列 >5000 物体）。
             // 时机依据：
-            //   - 晚于 AfterRenderingTransparents(300)：真实透明 Pass 已画完，调试色完全覆盖原透明外观
-            //   - 晚于分屏模式下的不透明调试 Pass(301)：左右两侧捕获内容互不污染
-            //   - 早于分屏调试场景捕获 Pass(+5) 与合成 Pass(+10)：右侧捕获包含透明调试结果
-            debugPassTransparent = new ModelBoxGeometryPass(_debugMaterial, _overdrawCountMaterial, true)
+            //   - 晚于 AfterRenderingTransparents(300)：真实不透明 + 天空盒 + 透明 Pass 均已画完
+            //   - 早于分屏调试场景捕获 Pass(+5) 与合成 Pass(+10)：右侧捕获包含调试结果
+            debugPassFinal = new ModelBoxGeometryPass(_debugMaterial, _overdrawCountMaterial, true)
             {
                 renderPassEvent = RenderPassEvent.AfterRenderingTransparents + 2
             };
@@ -252,9 +252,9 @@ namespace ModelBox
             if (!needsSplitScreen && (_snapshotART != null || _snapshotBRT != null))
                 ReleaseSnapshotRTs();
 
-            // [feat] SEL 模式：传递仅选中物体标志到 Geometry Pass
-            debugPass.SetDebugOnlySelected(manager.DebugOnlySelected);
-            debugPassTransparent.SetDebugOnlySelected(manager.DebugOnlySelected);
+            // [feat] SEL 模式：传递仅选中物体标志到最终全量 Geometry Pass
+            // （debugPass 仅用于 OpaqueTexture/Overdraw/透明层数 Capture 模式，不涉及 SEL）
+            debugPassFinal.SetDebugOnlySelected(manager.DebugOnlySelected);
 
             // === 分屏模式：在透明物体渲染后捕获正常场景 ===
             // 此时相机颜色缓冲 = 不透明物体 + 天空盒 + 透明物体（水面等），不含 Debug 覆写
@@ -277,27 +277,19 @@ namespace ModelBox
                 }
             }
 
-            // === 默认 Geometry Pass：非专用路径的模式走 overrideMaterial ===
+            // === 默认 Geometry 路径：非专用路径的模式走最终全量绘制 Pass ===
             if (!needsOpaqueTex && !needsOverdraw && !needsShadowMap && !needsScreenSpace && !needsTransparency)
             {
-                debugPass.ConfigureForMode(manager.CurrentMode, manager.CurrentParameters);
-                // [fix v0.6] 透明队列 Pass 同步模式/参数（同一 overrideMaterial，_DebugMode 一致）
-                debugPassTransparent.ConfigureForMode(manager.CurrentMode, manager.CurrentParameters);
+                // [fix v0.6.2] 单一最终全量 Pass：事件固定 AfterRenderingTransparents+2，
+                // 位于所有正常几何绘制之后（分屏正常捕获 300 < 302 < 调试捕获 305 < 合成 310）。
+                // 全队列（0..int.MaxValue）一次覆盖 — 既确保调试效果不会被任何正常渲染覆盖
+                // （含自定义队列 >5000 物体），也比旧双 Pass（opaque@100 + transparent@302）少一次全场景绘制
+                debugPassFinal.ConfigureForMode(manager.CurrentMode, manager.CurrentParameters);
 
                 if (needsDepth)
-                {
-                    debugPass.ConfigureInput(ScriptableRenderPassInput.Depth);
-                    debugPassTransparent.ConfigureInput(ScriptableRenderPassInput.Depth);
-                }
+                    debugPassFinal.ConfigureInput(ScriptableRenderPassInput.Depth);
 
-                // [fix] 分屏模式下 Debug Pass 移到透明物体之后，确保正常场景先被捕获（含水面等透明物体）
-                debugPass.renderPassEvent = needsSplitScreen
-                    ? RenderPassEvent.AfterRenderingTransparents + 1
-                    : RenderPassEvent.AfterRenderingOpaques;
-                renderer.EnqueuePass(debugPass);
-                // [fix v0.6] 透明队列调试绘制：事件固定 AfterRenderingTransparents+2
-                // （非分屏/分屏两种情形均晚于本 Pass 的不透明调试绘制与真实透明 Pass）
-                renderer.EnqueuePass(debugPassTransparent);
+                renderer.EnqueuePass(debugPassFinal);
             }
 
             // === OpaqueTexture 模式：双 Pass 架构 ===
@@ -382,7 +374,7 @@ namespace ModelBox
 
 #if UNITY_2022_1_OR_NEWER
             debugPass?.SetTargets(renderer.cameraColorTargetHandle, renderer.cameraDepthTargetHandle);
-            debugPassTransparent?.SetTargets(renderer.cameraColorTargetHandle, renderer.cameraDepthTargetHandle);
+            debugPassFinal?.SetTargets(renderer.cameraColorTargetHandle, renderer.cameraDepthTargetHandle);
             opaqueDrawPass?.SetTargets(renderer.cameraColorTargetHandle, renderer.cameraDepthTargetHandle);
             screenSpaceBlitPass?.SetTargets(renderer.cameraColorTargetHandle, renderer.cameraDepthTargetHandle);
             overdrawDrawPass?.SetTargets(renderer.cameraColorTargetHandle, renderer.cameraDepthTargetHandle);
@@ -391,7 +383,7 @@ namespace ModelBox
             debugSceneCapturePass?.SetCameraColor(renderer.cameraColorTargetHandle);
 #else
             debugPass?.SetTargets(renderer.cameraColorTarget, renderer.cameraDepthTarget);
-            debugPassTransparent?.SetTargets(renderer.cameraColorTarget, renderer.cameraDepthTarget);
+            debugPassFinal?.SetTargets(renderer.cameraColorTarget, renderer.cameraDepthTarget);
             opaqueDrawPass?.SetTargets(renderer.cameraColorTarget, renderer.cameraDepthTarget);
             screenSpaceBlitPass?.SetTargets(renderer.cameraColorTarget, renderer.cameraDepthTarget);
             overdrawDrawPass?.SetTargets(renderer.cameraColorTarget, renderer.cameraDepthTarget);
@@ -430,7 +422,7 @@ namespace ModelBox
                 CoreUtils.Destroy(_shadowMapBlitMaterial);
                 CoreUtils.Destroy(_splitCompositeMaterial);
                 debugPass?.ReleaseCaptureTexture();
-                debugPassTransparent?.ReleaseCaptureTexture();
+                debugPassFinal?.ReleaseCaptureTexture();
                 debugSceneCapturePass?.ReleaseCaptureTexture();
                 ReleaseSnapshotRTs();
 
@@ -442,7 +434,7 @@ namespace ModelBox
                 Shader.SetGlobalTexture("_SnapshotBTex", null);
             }
             debugPass = null;
-            debugPassTransparent = null;
+            debugPassFinal = null;
             opaqueDrawPass = null;
             screenSpaceBlitPass = null;
             overdrawDrawPass = null;

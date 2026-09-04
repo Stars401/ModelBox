@@ -268,7 +268,7 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 
 | 模式类型 | 渲染路径 | 说明 |
 |---------|---------|------|
-| Geometry (29 种) | `overrideMaterial` + `DrawRenderers` | 不透明队列 @ AfterRenderingOpaques；v0.6 起透明队列 @ AfterRenderingTransparents+2（覆盖水面/玻璃/粒子等，透明物体以不透明化调试色显示） |
+| Geometry (29 种) | `overrideMaterial` + `DrawRenderers` | 单一最终全量 Pass @ AfterRenderingTransparents+2：渲染队列最后一次几何绘制，全队列（0..int.MaxValue）一次覆盖，调试效果不会被后续正常渲染覆盖 |
 | ScreenSpace (3 种) | 全屏 Blit + 深度重建 | Depth, ScreenNormal, RayMarch |
 | Capture+Draw (3 种) | 双 Pass | OpaqueTexture, Overdraw, TransparencyLayers |
 | Overlay (6 种) | Handles API + Shader 底色 | Wireframe, Vertices, Normals, Tangents, Bounds, LocalAxes |
@@ -377,6 +377,9 @@ com.unity.modelbox/
 - **叠加性能优化**：仅开启局部坐标轴时跳过网格缓存构建（该叠加不依赖网格数据，避免高面数模型无谓开销）
 - **高面数模型叠加性能重构**：线框/法线/切线改为烘焙 Lines 拓扑网格 + 单次 DrawMeshNow —— 顶点变换全部由 GPU 完成，消除每帧十万级 C# 矩阵乘法与 Handles.DrawLines 立即模式提交；法线/切线长度滑条改为 shader uniform 拉伸（uv tip 标记），拖动零重建；蒙皮网格与粗线（宽度>1）保留原路径；法线/切线默认宽度 2→1（默认体验即快速路径）
 - **局部坐标轴正确性加固**：端点/轴长计算抽为纯函数并以手算常量单元测试覆盖（Yaw/Pitch 旋转映射，逐分量容差断言）；轴长基准只统计网格类 Renderer（粒子不再撑大轴长）
+- **渲染队列最终 Pass 合并**：几何调试由双 Pass（opaque@100 + transparent@302）合并为单一最终全量 Pass（全队列 0..int.MaxValue @ AfterRenderingTransparents+2）—— 渲染队列最后一次几何绘制，杜绝任何正常渲染覆盖调试效果；自定义队列 >5000 物体不再漏覆盖；总绘制次数反而减少一次
+- **材质沙盒候选遍历修复**：候选改为跨 Renderer 聚合 + 按材质实例去重（修复"两个材质同时出现在待选选项"）；槽位替换按材质实例匹配 —— LOD 各级别/多部件材质布局不同时不再错替，材质的所有引用处同步预览
+- **检查页顶点色通道隔离**：顶点色激活时检查页直接展开 RGB/R/G/B/A 隔离选项，免跳转物体页
 
 ### v0.5.0
 - **骨骼 gizmo 渲染**：SceneView 中显示骨骼位置标记（蓝色球体）、父子连线、选中骨骼高亮（橙色球 + 坐标轴 + 名称标签）

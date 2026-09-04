@@ -104,6 +104,9 @@ namespace ModelBox
         private static GUIStyle _sidebarTipStyle; // [perf P2] 缓存版本提示样式
         private static GUIStyle _pageHeaderSubStyle;
 
+        // [perf] 顶点色通道隔离选项（检查页），缓存避免每帧分配
+        private static readonly string[] VertexChannelOptions = { "RGB", "R", "G", "B", "A" };
+
         // ==================== State ====================
 
         private DebugViewMode _selectedMode;
@@ -553,6 +556,19 @@ namespace ModelBox
                                 selManager.LocalAxesLength, 0.1f, 2f);
                         if (EditorGUI.EndChangeCheck())
                             EditorApplication.delayCall += () => SceneView.RepaintAll();
+                    }
+
+                    // [feat v0.6.x] 顶点色激活时在检查页展开通道隔离（RGB/R/G/B/A），免跳转物体页
+                    if (selManager.CurrentMode == SelectionDebugMode.VertexColor)
+                    {
+                        EditorGUILayout.Space(2);
+                        EditorGUILayout.LabelField("顶点色通道隔离", EditorStyles.miniBoldLabel);
+                        int vcChannel = GUILayout.SelectionGrid(selManager.VertexColorChannel, VertexChannelOptions, 5);
+                        if (vcChannel != selManager.VertexColorChannel)
+                        {
+                            selManager.VertexColorChannel = vcChannel;
+                            selManager.UpdateVertexColorProperties();
+                        }
                     }
                 }
 
