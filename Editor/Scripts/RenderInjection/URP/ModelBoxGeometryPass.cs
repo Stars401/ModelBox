@@ -149,11 +149,23 @@ namespace ModelBox
 
             // [feat] SEL 模式：临时将选中物体分配到专用 Layer，渲染后恢复
             // [fix v0.6.2] SEL + 最终全量实例：过滤队列与所属实例保持一致
+            // [fix v0.6.x] 本地调试互斥：被选区调试/材质沙盒替换了 sharedMaterials 的 Renderer
+            // 不参与全局调试绘制（本地更具体的调试优先，README 语义：选区调试独立于全场景调试）
+            var localDebugTransforms = _finalSweep ? CollectLocalDebugTransforms() : null;
+            var localDebugOriginalLayers = localDebugTransforms != null
+                ? SaveAndSetLayers(localDebugTransforms, SelLayer)
+                : null;
+
             var selectedTransforms = _debugOnlySelected ? GetSelectedHierarchy() : null;
+            // SEL 模式：从选中层级中剔除本地调试接管的物体（其显示由选区调试/沙盒负责）
+            if (_debugOnlySelected && selectedTransforms != null && localDebugTransforms != null)
+                RemoveAllByTransform(selectedTransforms, localDebugTransforms);
             var originalLayers = _debugOnlySelected ? SaveAndSetLayers(selectedTransforms, SelLayer) : null;
             var filterSettings = _debugOnlySelected
                 ? new FilteringSettings(_finalSweep ? new RenderQueueRange(0, int.MaxValue) : RenderQueueRange.opaque, SelLayerMask)
-                : _filterSettings;
+                : (localDebugOriginalLayers != null
+                    ? new FilteringSettings(new RenderQueueRange(0, int.MaxValue), ~SelLayerMask)
+                    : _filterSettings);
 
             try
             {
@@ -185,6 +197,9 @@ namespace ModelBox
                 // [fix] 确保 Layer 始终恢复（即使 DrawRenderers 抛异常）
                 if (originalLayers != null)
                     RestoreLayers(selectedTransforms, originalLayers);
+                // [fix v0.6.x] 恢复本地调试对象的 Layer
+                if (localDebugOriginalLayers != null)
+                    RestoreLayers(localDebugTransforms, localDebugOriginalLayers);
             }
 
             context.ExecuteCommandBuffer(cmd);
@@ -250,6 +265,56 @@ namespace ModelBox
             {
                 if (transforms[i] == null) continue;
                 transforms[i].gameObject.layer = originalLayers[i];
+            }
+        }
+
+        /// <summary>
+        /// [fix v0.6.x] 收集被本地调试系统（选区调试材质覆盖 ∪ 材质沙盒预览）接管材质的 Renderer 的 Transform。
+        /// 全局调试最终全量 Pass 将其临时移入 SelLayer 并从过滤中排除（本地调试优先）。无则返回 null。
+        /// </summary>
+        private static List<Transform> CollectLocalDebugTransforms()
+        {
+            List<Renderer> localRenderers = null;
+
+            var selMgr = ModelBoxSelectionManager.Instance;
+            if (selMgr != null && selMgr.CurrentMode != SelectionDebugMode.None)
+            {
+                var overridden = selMgr.OverriddenRenderers;
+                if (overridden.Count > 0)
+                    localRenderers = new List<Renderer>(overridden);
+            }
+
+            if (MaterialDiffPanel.SandboxActive && MaterialDiffPanel.SandboxPreviewRenderers != null)
+            {
+                if (localRenderers == null) localRenderers = new List<Renderer>();
+                foreach (var r in MaterialDiffPanel.SandboxPreviewRenderers)
+                    if (r != null && !localRenderers.Contains(r))
+                        localRenderers.Add(r);
+            }
+
+            if (localRenderers == null) return null;
+            var transforms = new List<Transform>(localRenderers.Count);
+            foreach (var r in localRenderers)
+                if (r != null) transforms.Add(r.transform);
+            return transforms;
+        }
+
+        /// <summary>从 list 中剔除 excludeList 包含的 Transform（引用相等）。</summary>
+        private static void RemoveAllByTransform(List<Transform> list, List<Transform> excludeList)
+        {
+            if (list == null || excludeList == null || excludeList.Count == 0) return;
+            for (int i = list.Count - 1; i >= 0; i--)
+            {
+                var t = list[i];
+                if (t == null) continue;
+                foreach (var ex in excludeList)
+                {
+                    if (ex != null && ReferenceEquals(ex, t))
+                    {
+                        list.RemoveAt(i);
+                        break;
+                    }
+                }
             }
         }
 

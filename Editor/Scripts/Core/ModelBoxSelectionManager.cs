@@ -211,6 +211,13 @@ namespace ModelBox
         public void SetMode(SelectionDebugMode mode)
         {
             if (CurrentMode == mode) return;
+            // [fix v0.6.x] 沙盒互斥守卫：材质沙盒活跃时禁止选区调试 —— 沙盒期间 sharedMaterials 已被
+            // 替换为沙盒材质，若此时保存"原始材质"实际存的是沙盒材质，丢弃沙盒后恢复链互相污染导致材质错乱
+            if (mode != SelectionDebugMode.None && MaterialDiffPanel.SandboxActive)
+            {
+                Debug.LogWarning("[ModelBox] 选区调试与材质沙盒互斥：请先「丢弃」沙盒再启用选区调试。");
+                return;
+            }
             RestoreOriginalMaterials();
             CurrentMode = mode;
             if (mode != SelectionDebugMode.None)
@@ -455,6 +462,13 @@ namespace ModelBox
         {
             return renderer != null && _originalMaterials.ContainsKey(renderer);
         }
+
+        /// <summary>
+        /// [feat v0.6.x] 当前被选区调试材质覆盖的 Renderer 集合（只读，零分配）。
+        /// 全局调试最终全量 Pass 据此排除这些 Renderer —— 选区调试独立于全场景调试（见 README 语义），
+        /// 本地（更具体）的调试显示优先于全局调试材质。
+        /// </summary>
+        public IReadOnlyCollection<Renderer> OverriddenRenderers => _originalMaterials.Keys;
 
         /// <summary>
         /// [feat] 贴图通道模式：获取采样源贴图（自定义贴图优先，否则该 Renderer 原始材质的主贴图）。

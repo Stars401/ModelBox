@@ -59,6 +59,12 @@ namespace ModelBox
         // [fix v0.4] 多 Renderer 静态镜像
         private static List<Renderer> _sandboxAllRenderers;
         private static List<Material[]> _sandboxAllSavedOriginals;
+        // [fix v0.6.x] 沙盒活跃标志：与选区调试互斥守卫（两系统都替换 sharedMaterials，无互斥会互相污染恢复链）
+        private static bool s_sandboxActive;
+        /// <summary>材质沙盒是否活跃（SelectionManager.SetMode 据此拒绝选区调试，保护恢复链）。</summary>
+        public static bool SandboxActive => s_sandboxActive;
+        /// <summary>[fix v0.6.x] 沙盒正在预览替换材质的 Renderer 列表（静态镜像；全局调试最终全量 Pass 据此排除）。</summary>
+        public static List<Renderer> SandboxPreviewRenderers => _sandboxAllRenderers;
         // ---- 状态 ----
         private Renderer _targetRenderer;
         // [fix v0.4] LODGroup 多 Renderer 支持：沙盒需要替换所有 LOD 级别的对应材质槽
@@ -685,6 +691,15 @@ namespace ModelBox
 
         private void StartSandbox(Material original, int slotIndex)
         {
+            // [fix v0.6.x] 互斥保护：先关闭选区调试（其 RestoreOriginalMaterials 会恢复原始材质），
+            // 再做沙盒快照 — 否则选区调试会把沙盒材质存为"原始材质"，恢复链互相污染
+            var selMgr = ModelBoxSelectionManager.Instance;
+            if (selMgr != null && selMgr.CurrentMode != SelectionDebugMode.None)
+            {
+                Debug.Log("[ModelBox] 材质沙盒启动：已自动关闭选区调试（两者互斥，保护材质恢复链）。");
+                selMgr.SetMode(SelectionDebugMode.None);
+            }
+
             // 创建临时副本
             _sandboxMaterial = new Material(original)
             {
@@ -740,6 +755,7 @@ namespace ModelBox
             _sandboxSavedOriginals = _allSavedOriginals.Count > 0 ? _allSavedOriginals[0] : null;
             _sandboxAllRenderers = new List<Renderer>(_allTargetRenderers);
             _sandboxAllSavedOriginals = new List<Material[]>(_allSavedOriginals);
+            s_sandboxActive = true; // [fix v0.6.x] 互斥标志：沙盒已接管这些 Renderer 的材质
 
             // [fix v0.4] 启动后立即触发 SceneView 重绘，否则用户看不到材质替换效果
             EditorApplication.delayCall += () => SceneView.RepaintAll();
@@ -887,6 +903,9 @@ namespace ModelBox
             _sandboxActiveRenderer = null;
             _sandboxActiveMaterial = null;
             _sandboxSavedOriginals = null;
+            _sandboxAllRenderers = null; // [fix v0.6.x] 丢弃时同步清空多 Renderer 镜像（原仅域重载时清理）
+            _sandboxAllSavedOriginals = null;
+            s_sandboxActive = false; // [fix v0.6.x] 解除互斥
 
             EditorApplication.delayCall += () => SceneView.RepaintAll();
         }
