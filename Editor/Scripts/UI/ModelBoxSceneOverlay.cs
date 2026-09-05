@@ -361,7 +361,11 @@ namespace ModelBox
                 if (currentMode == DebugViewMode.None)
                     GUI.backgroundColor = ModelBoxStyles.GetActiveButtonColor();
                 if (GUILayout.Button(_offContent, EditorStyles.toolbarButton, GUILayout.Width(36)))
+                {
+                    // [fix v0.6.x] 消费鼠标事件，防止点击穿透到 SceneView 触发相机操作
+                    e.Use();
                     manager.SetDebugMode(DebugViewMode.None);
+                }
                 GUI.backgroundColor = oldBg;
             }
 
@@ -445,7 +449,11 @@ namespace ModelBox
                 if (manager.DebugOnlySelected)
                     GUI.backgroundColor = ModelBoxStyles.SelButtonActiveColor;
                 if (GUILayout.Button(_selContent, EditorStyles.toolbarButton, GUILayout.Width(36)))
+                {
+                    // [fix v0.6.x] 消费鼠标事件，防止事件穿透到 SceneView
+                    e.Use();
                     manager.ToggleDebugOnlySelected();
+                }
                 GUI.backgroundColor = oldBg;
             }
 
@@ -455,7 +463,10 @@ namespace ModelBox
                 if (manager.SplitScreenEnabled)
                     GUI.backgroundColor = new Color(0.40f, 0.58f, 0.85f, 0.8f);
                 if (GUILayout.Button(_splitContent, EditorStyles.toolbarButton, GUILayout.Width(42)))
+                {
+                    e.Use();
                     manager.SetSplitScreen(!manager.SplitScreenEnabled);
+                }
                 GUI.backgroundColor = oldBg;
             }
 
@@ -469,7 +480,10 @@ namespace ModelBox
                 bool freezeClicked = GUILayout.Button(_freezeContent, EditorStyles.toolbarButton, GUILayout.Width(36));
                 GUI.backgroundColor = oldBg;
                 if (freezeClicked && manager.SplitScreenEnabled)
+                {
+                    e.Use();
                     manager.SetFreezeLeftSnapshot(!manager.FreezeLeftSnapshot);
+                }
             }
 
             // 快照 A/B（禁用灰显而非隐藏）
@@ -483,6 +497,7 @@ namespace ModelBox
                     GUI.backgroundColor = new Color(0.30f, 0.65f, 0.40f, 0.7f);
                 if (GUILayout.Button(_snapAContent, EditorStyles.toolbarButton, GUILayout.Width(24)))
                 {
+                    e.Use();
                     if (manager.SplitScreenEnabled)
                     {
                         if (manager.SnapshotMode == 0) manager.SaveSnapshotA();
@@ -496,6 +511,7 @@ namespace ModelBox
                     GUI.backgroundColor = new Color(0.45f, 0.55f, 0.80f, 0.7f);
                 if (GUILayout.Button(_snapBContent, EditorStyles.toolbarButton, GUILayout.Width(24)))
                 {
+                    e.Use();
                     if (manager.SplitScreenEnabled)
                     {
                         if (manager.SnapshotMode <= 1) manager.SaveSnapshotB();
@@ -510,7 +526,10 @@ namespace ModelBox
 
             // Snap 截图按钮
             if (GUILayout.Button(_snapContent, EditorStyles.toolbarButton, GUILayout.Width(42)))
+            {
+                e.Use();
                 ScreenshotCapture.CaptureSceneView();
+            }
 
             GUILayout.EndHorizontal();
             GUILayout.EndArea();
@@ -752,18 +771,35 @@ namespace ModelBox
         private static readonly Color _hudAccentColor = new Color(0.45f, 0.62f, 0.82f, 1f);
         private static GUIStyle _hudStyle;
         private static readonly GUIContent _hudContent = new GUIContent(); // [R6 fix] 缓存复用
+        // [perf v0.6.x] Mesh 统计 HUD 文本缓存：切换选中立即重建，同一选中 0.5s 刷新一次
+        private static string _hudMeshCachedText;
+        private static Transform _hudMeshLastSelection;
+        private static double _hudMeshNextUpdate;
 
         /// <summary>
         /// 左下角 Mesh 统计 HUD：显示选中物体的顶点/面数/材质数/子网格数。
-        /// BuildHudText 仅遍历子 Renderer（廉价），无需帧级缓存。
+        /// [perf v0.6.x] 文本缓存：切换选中立即重建，同一选中 0.5s 刷新一次 ——
+        /// 高面数模型 BuildHudText 的 GetIndexCount 遍历不便宜，不应每帧全量执行。
         /// </summary>
         private static void DrawMeshStatsHUD()
         {
             var selected = Selection.activeTransform;
-            if (selected == null) return;
+            if (selected == null)
+            {
+                // 取消选择时清缓存
+                _hudMeshCachedText = null;
+                _hudMeshLastSelection = null;
+                return;
+            }
 
-            // [R2 fix] 直接构建，不依赖 Time.frameCount（编辑器中不可靠）
-            string text = BuildHudText(selected);
+            double now = EditorApplication.timeSinceStartup;
+            if (_hudMeshCachedText == null || !ReferenceEquals(selected, _hudMeshLastSelection) || now >= _hudMeshNextUpdate)
+            {
+                _hudMeshCachedText = BuildHudText(selected);
+                _hudMeshLastSelection = selected;
+                _hudMeshNextUpdate = now + 0.5;
+            }
+            string text = _hudMeshCachedText;
             if (text == null) return;
 
             if (_hudStyle == null)
@@ -813,7 +849,8 @@ namespace ModelBox
 
             foreach (var r in renderers)
             {
-                if (r == null) continue;
+                if (r == null || !r.enabled || !r.gameObject.activeInHierarchy) continue;
+                // [fix v0.6.x] 与检查页统计口径一致：排除 LOD 非活跃级别与未激活物体
                 mats += r.sharedMaterials.Length;
 
                 if (r is MeshRenderer mr)

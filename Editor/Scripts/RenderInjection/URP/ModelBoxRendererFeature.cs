@@ -125,7 +125,8 @@ namespace ModelBox
                 renderPassEvent = RenderPassEvent.AfterRenderingOpaques
             };
 
-            // [fix v0.6.2] 最终全量 Geometry Pass：覆盖全部渲染队列（0..int.MaxValue），
+            // [fix v0.6.2] 最终全量 Geometry Pass：覆盖全部渲染队列（0..5000，RenderQueueRange API 上限；
+            // 传 int.MaxValue 会抛 ArgumentOutOfRangeException 使管线创建失败，>5000 自定义队列无法表达），
             // 在所有正常几何绘制完成后（AfterRenderingTransparents+2）用 overrideMaterial 做渲染队列
             // 最后一次几何绘制 —— 调试效果不可能被任何后续正常渲染覆盖（含自定义队列 >5000 物体）。
             // 时机依据：

@@ -988,7 +988,7 @@ namespace ModelBox
             DrawShortcutRow("Alt + 0", "开/关调试", miniLabel);
             DrawShortcutRow("Alt + 1~9", "模式 1-9（WP/LP/WN/LN/U0/U1/Dp/VC/SU）", miniLabel);
             DrawShortcutRow("Alt + Shift + 1~5", "模式 10-14（RD/OD/PC/WF/OT）", miniLabel);
-            DrawShortcutRow("Alt + Shift + 6~8", "模式 15-17（OD/TL/SN）", miniLabel);
+            DrawShortcutRow("Alt + Shift + 6~8", "模式 15/17/18（OD/SN/SM；TL=16 无快捷键）", miniLabel);
             DrawShortcutRow("Alt + Shift + 9", "NdotL（PBR 诊断）", miniLabel);
             DrawShortcutRow("Alt + , / .", "上一个 / 下一个模式（循环全部 34 种）", miniLabel);
             EditorGUILayout.EndVertical();

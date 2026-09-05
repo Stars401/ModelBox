@@ -151,7 +151,14 @@ namespace ModelBox
                     // 离开 Wireframe 模式：恢复之前的 flags（仅清除自动添加的 Wireframe 位）
                     if (_hasSavedOverlayFlags)
                     {
-                        selManager.SetOverlayFlags(_overlayFlagsBeforeWireframe);
+                        // [fix v0.6.x] 保留用户在 Wireframe 模式期间手动开启的其他叠加位 —
+                        // 旧逻辑整体回滚到进入前快照，会把用户刚开的顶点/法线等叠加静默丢弃；
+                        // 仅当 Wireframe 位是本次自动添加（进入前未开启）时才移除它
+                        var current = selManager.OverlayFlags;
+                        var restored = (_overlayFlagsBeforeWireframe & MeshOverlayFlags.Wireframe) != 0
+                            ? current
+                            : current & ~MeshOverlayFlags.Wireframe;
+                        selManager.SetOverlayFlags(restored);
                         _hasSavedOverlayFlags = false;
                     }
                     else
@@ -278,9 +285,16 @@ namespace ModelBox
         {
             if (SplitScreenEnabled == enabled) return;
             SplitScreenEnabled = enabled;
-            // [fix] 关闭分屏时同步重置冻结状态，避免再次开启时引用脏 RT
-            if (!enabled && FreezeLeftSnapshot)
-                SetFreezeLeftSnapshot(false);
+            // [fix] 关闭分屏时同步重置冻结与快照对比状态，避免再次开启时引用脏 RT
+            if (!enabled)
+            {
+                if (FreezeLeftSnapshot)
+                    SetFreezeLeftSnapshot(false);
+                // [fix v0.6.x] 分屏关闭时快照 RT 由 Feature 释放（ReleaseSnapshotRTs），
+                // SnapshotMode 必须同步归零 —— 否则重开分屏后 SA/SB 按钮高亮"有快照"但实际点击走保存流程
+                if (SnapshotMode != 0)
+                    SnapshotMode = 0;
+            }
             var settings = ModelBoxSettings.GetOrCreate();
             if (settings != null) { settings.SplitScreenEnabled = enabled; settings.Save(); }
             EditorApplication.delayCall += () => SceneView.RepaintAll();

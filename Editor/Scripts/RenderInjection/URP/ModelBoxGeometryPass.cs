@@ -17,8 +17,9 @@ namespace ModelBox
     ///     相机颜色（仅 opaque 物体）到临时纹理，供 Draw Pass 采样。
     ///   - Overdraw 模式：Capture Phase — 在 AfterRenderingOpaques+1 用计数 shader
     ///     累加绘制到临时纹理，供 OverdrawHeatmap Draw Pass 采样。
-    /// [fix v0.6.2] 最终全量绘制 Pass：drawTransparentQueue=true 的实例过滤 RenderQueueRange(0, int.MaxValue)
-    ///   （全部渲染队列，含自定义队列 >5000），由 Feature 在 AfterRenderingTransparents+2 注入 ——
+    /// [fix v0.6.2] 最终全量绘制 Pass：drawTransparentQueue=true 的实例过滤 RenderQueueRange(0, 5000)
+    ///   （API 允许的全部渲染队列 0..5000，上限由引擎强制；>5000 的自定义队列物体超出
+    ///   RenderQueueRange 表达范围，不在最终全量覆盖内），由 Feature 在 AfterRenderingTransparents+2 注入 ——
     ///   位于所有正常几何绘制（不透明 + 天空盒 + 透明）之后、分屏捕获之前，
     ///   是渲染队列的最后一个几何绘制 Pass：任何物体的调试效果都不会被后续正常渲染覆盖。
     ///   调试 shader ZWrite Off，最终全量绘制不污染深度缓冲；
@@ -80,10 +81,11 @@ namespace ModelBox
             _overrideMaterial = overrideMaterial;
             _overdrawCountMaterial = overdrawCountMaterial;
             _finalSweep = finalSweep;
-            // [fix v0.6.2] 最终全量实例覆盖全部渲染队列（0..int.MaxValue，含自定义队列 >5000）；
+            // [fix v0.6.2] 最终全量实例覆盖全部渲染队列（0..5000；RenderQueueRange API 上限为 5000，
+            // 传 int.MaxValue 会抛 ArgumentOutOfRangeException 导致整条 URP 管线创建失败、编辑器每帧刷异常）；
             // 普通实例保持 opaque 过滤（供 Capture 模式复用）
             _filterSettings = new FilteringSettings(
-                finalSweep ? new RenderQueueRange(0, int.MaxValue) : RenderQueueRange.opaque);
+                finalSweep ? new RenderQueueRange(0, 5000) : RenderQueueRange.opaque);
 
             _shaderTags = new List<ShaderTagId>
             {
@@ -162,9 +164,9 @@ namespace ModelBox
                 RemoveAllByTransform(selectedTransforms, localDebugTransforms);
             var originalLayers = _debugOnlySelected ? SaveAndSetLayers(selectedTransforms, SelLayer) : null;
             var filterSettings = _debugOnlySelected
-                ? new FilteringSettings(_finalSweep ? new RenderQueueRange(0, int.MaxValue) : RenderQueueRange.opaque, SelLayerMask)
+                ? new FilteringSettings(_finalSweep ? new RenderQueueRange(0, 5000) : RenderQueueRange.opaque, SelLayerMask)
                 : (localDebugOriginalLayers != null
-                    ? new FilteringSettings(new RenderQueueRange(0, int.MaxValue), ~SelLayerMask)
+                    ? new FilteringSettings(new RenderQueueRange(0, 5000), ~SelLayerMask)
                     : _filterSettings);
 
             try
