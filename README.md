@@ -1,10 +1,14 @@
 # modelBox — Unity URP 实时 Shader 调试可视化工具
 
-> **版本:** v0.4.0 | **作者:** Sky幻 | **Unity:** 2021.3+ | **管线:** URP 12.0+
+> **版本:** v0.6.1 | **作者:** Sky幻 | **Unity:** 2021.3+ | **管线:** URP 12.0+
+
+![modelBox 场景调试 —— 平面法线模式](Documentation~/screenshots/scene-flat-normal.png)
+
+*▲ 场景调试 · 平面法线（Flat Normal）模式：Terrain 上以 `ddx/ddy` 交叉积计算逐像素平面法线并映射为 RGB，每一块平面呈现独立色块，平滑组/硬边分布一目了然。右侧面板按「几何数据 / 诊断模式 / 高级模式 / PBR 诊断 / 光照 & 材质」五组分类切换 35 种调试视图，SceneView 底部 PixelBar 实时回读鼠标指向像素的 RGBA 与深度。*
 
 ## 概述
 
-modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖**的调试可视化能力。一键切换 35 种调试视图，在 SceneView 中直接观察 Shader 中间数据，无需断点、无需修改任何 Shader 源码。
+modelBox 为 材质开发者提供**运行时实时、全场景覆盖**的调试可视化能力。以支持在U3D引擎内快速调试模型数据，快速定位shader问题，并以极为便捷的方式可视化数据，内置约 35 种调试模式，在 SceneView 中直接观察 Shader 中间数据，无需断点、无需修改任何 Shader 源码，工具会在你当前的渲染管线添加RendererFeature，以覆盖叠加目前的绘制效果。
 
 ### 核心特性
 
@@ -12,12 +16,11 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 - **35 种调试模式**：覆盖几何数据、诊断、PBR 分析、光照分离、导数诊断 5 大类别
 - **分屏对比**：左侧正常渲染 + 右侧调试模式，支持冻结快照和 A/B 帧对比
 - **选区调试**：对选中物体单独进行材质覆盖（贴图通道/棋盘格/属性颜色）和网格叠加（线框/顶点/法线/切线/AABB/局部坐标）
-- **骨骼面板**：独立侧边栏页面，骨骼层级树、逐骨骼权重统计、搜索过滤
+- **骨骼面板**(beta)：独立侧边栏页面，骨骼层级树、逐骨骼权重统计、搜索过滤
 - **Shader 信息面板**：查看/切换 Keywords（绿色高亮已启用）、Passes、Properties（可编辑 + Undo）
 - **Mesh 信息面板**：顶点数、UV 通道、子网格材质分配、LOD 层级预览
 - **材质沙盒**：A/B 材质参数 Diff，支持实时编辑和应用到原始
-- **像素拾取**：PixelBar 实时显示鼠标指向的物体/Shader/坐标/自定义属性
-- **GPU 加速叠加**：实例化顶点球体 + LOD 距离优化 + 深度测试开关
+- **像素拾取**(beta)：PixelBar 实时显示鼠标指向的物体/Shader/坐标/自定义属性
 - **可配置 HUD**：性能统计逐项开关（FPS [BETA] / DC / Tri / Vert / 总分配 / C#堆）
 - **一键安装/卸载**：自动配置 URP RendererFeature
 
@@ -67,9 +70,27 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 
 ---
 
-## 调试模式（35 种）
+## 场景调试（35 种调试视图）
 
-### 常用
+「场景」页按 **几何数据 / 诊断模式 / 高级模式 / PBR 诊断 / 光照 & 材质** 五组分类，点击即全场景生效；每组模式附带参数滑条（深度范围、Gamma 校正、颜色映射等），底部说明文字解释该模式用于检查什么问题。
+
+顶部截图即为 **平面法线（Flat Normal）** 模式的实际效果 —— 适用于检查 Terrain / 高模的平滑组与硬边是否正确。
+
+**深度（Depth）** 模式 —— 线性化眼空间深度以灰度显示，可调深度范围（米）与 Gamma 校正、切换颜色映射（原始 Raw / 其他映射），用于检查 Z 分布、遮挡关系与远裁剪设置（需要 URP Depth Texture）：
+
+![深度模式](Documentation~/screenshots/scene-depth.png)
+
+*▲ 深度检查模式：天空（最远）为纯黑，地形按线性深度渐变；底部状态条同步显示 FPS / DC / 三角面 / 顶点 / 显存 / C# 堆，PixelBar 回读 `R/G/B/A/Dp` 数值。*
+
+**UV0** 模式 —— 第一套 UV 坐标映射到 RG 颜色通道，模型表面按 UV 展开呈现渐变色块，UV 接缝、重叠、拉伸一眼定位：
+
+![UV0 物体调试模式](Documentation~/screenshots/object-uv0.png)
+
+*▲ UV0 物体调试模式：绿色 = U 方向低值区域，橙黄 = 高值区域；面板提示「第一套 UV 坐标 → RG 颜色」，UV1 同理切换。*
+
+### 模式列表
+
+#### 常用
 
 | 模式 | 说明 |
 |------|------|
@@ -79,7 +100,7 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 | 顶点颜色 (VC) | 顶点颜色 → RGBA |
 | 线框 (WF) | 线框叠加（选中物体 + 暗色法线底色） |
 
-### 几何
+#### 几何
 
 | 模式 | 说明 |
 |------|------|
@@ -90,7 +111,7 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 | 副切线方向 (B) | 副切线方向 → RGB（检查 UV Y 轴 / 切线手性） |
 | 物体 ID (ID) | 每物体唯一颜色（Transform 矩阵哈希 → HSV 着色） |
 
-### 纹理
+#### 纹理
 
 | 模式 | 说明 |
 |------|------|
@@ -100,7 +121,7 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 | Mipmap 级别 (Mip) | UV 导数 → Mip 等级估算（纹理密度检查） |
 | 屏幕 UV (SU) | 屏幕空间 UV → RG（检查 ComputeScreenPos） |
 
-### 光照
+#### 光照
 
 | 模式 | 说明 |
 |------|------|
@@ -113,7 +134,7 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 | 粗糙度 (Rg) | 粗糙度影响可视化 |
 | 金属度 (Mt) | 金属度影响可视化 |
 
-### 诊断
+#### 诊断
 
 | 模式 | 说明 |
 |------|------|
@@ -152,6 +173,12 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 | **UV 棋盘格** | 棋盘格图案检查 UV 展开，可调网格密度和颜色 |
 | **Shader 属性颜色** | 指定 Shader 属性 → 纯色（支持 Color/Float，一键读取） |
 
+**UV 棋盘格** 材质应用 —— 一键把可调密度的棋盘格材质应用到选中模型，配合「物体」页下方的 Shader 信息面板（Passes / Keywords / Properties）同步检查：
+
+![UV 棋盘格材质应用](Documentation~/screenshots/object-uv-checkerboard.png)
+
+*▲ UV 棋盘格：网格密度 10、颜色 A/B 可调，棋盘格沿模型表面连续分布，UV 拉伸处格子被拉长、接缝处断开；支持一键关闭棋盘格 / 恢复原始材质。*
+
 ### 网格叠加
 
 | 叠加类型 | 说明 |
@@ -163,8 +190,43 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 | **AABB** | 世界空间包围盒线框（12 条边） |
 | **局部坐标** | 模型原点（pivot）三向轴：X红/Y绿/Z蓝 + 圆锥箭头 + 轴标签，轴长随选中层级合并包围盒自适应（可调系数） |
 
+**线框 + 顶点** 组合叠加（实验）—— 蓝色线框勾勒三角面拓扑，黄色实例化球体标记每个顶点，两种叠加可自由组合开关：
+
+![网格顶点叠加](Documentation~/screenshots/object-wireframe-vertices.png)
+
+*▲ 线框 + 顶点叠加（实验）—— 暂时有点问题（
+
 > 同时支持 `MeshRenderer` 和 `SkinnedMeshRenderer`（BakeMesh 烘焙后叠加）。
 > 深度测试可在设置页切换：关闭后叠加点可穿透模型显示。
+
+---
+
+## Mesh 信息面板
+
+「网格」页展示选中物体的网格完整档案 —— 统计、包围盒、数据通道、以及 Shader 视角的顶点输入语义映射：
+
+![Mesh 信息面板](Documentation~/screenshots/mesh-info.png)
+
+*▲ Mesh 信息（以苏珊娜模型为例）：**基础统计** 顶点 27,527 / 三角面 15,744 / 子网格 1 / 索引格式 UInt16 / 拓扑 Triangles / Blend Shape 0；**包围盒** 中心、尺寸、Extents；**数据通道** 逐项标注可用性（法线 ✓ / 切线 ✓ / UV0 ✓ 2D，顶点色 ✗ / UV1-3 ✗ / 骨骼权重 ✗）；**Appdata 语义映射** 列出 Shader 中可用的顶点输入（POSITION / NORMAL / TANGENT / TEXCOORD0…），带类型（float3 / float2）与用途说明 —— 写 Shader 前先看这个，避免引用模型没有的通道。*
+
+- 顶点/三角形/子网格/索引格式/拓扑
+- 子网格材质分配详情（SubMesh 0: Body_Mat | 12,000 tri）
+- LOD 层级预览（LOD Group 各级别面数/材质数/当前活跃级别高亮）
+- 数据通道可用性（法线/切线/顶点色/UV0-3/骨骼权重）
+
+---
+
+## 材质沙盒
+
+「沙盒」页提供**材质 A/B 对比测试**：在不动原始材质的前提下，以预览方式实时改写目标物体的材质参数，满意后一键应用（应用前可查看差异明细）：
+
+![材质沙盒](Documentation~/screenshots/material-sandbox.png)
+
+*▲ 材质沙盒：预览 ON（Scene 中实时可见），「重置 / 仅差异 / 显示隐藏」快速操作，右上角实时显示差异计数（差异: 1 / 共: 31）；被 keyword 隐藏的 17 个属性（Normal Map / Emission / Occlusion Map / Height Map / Detail Map / Specular Map…）一键解锁显示；全部 Shader 属性（_BaseColor / _Smoothness / _Metallic / _Parallax…）可搜索、可编辑，底部「应用到原始 (1 项差异)」提交或「丢弃」还原。*
+
+- 候选材质跨 Renderer 聚合 + 按材质实例去重，槽位替换按材质实例匹配（LOD 各级别/多部件同步预览）
+- 与选区调试双向互斥守卫，杜绝 sharedMaterials 恢复链互相污染
+- 全部属性可编辑 + Undo，支持搜索过滤与「仅差异」视图
 
 ---
 
@@ -192,15 +254,6 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 - **Keywords**：`multi_compile` / `shader_feature` 分类，绿色高亮已启用项，「仅显示已启用」过滤器
 - **Passes**：所有 Pass 名称，可启用/禁用
 - **Properties**：所有属性（类型/值/描述/标志），支持搜索 + 编辑 + Undo
-
----
-
-## Mesh 信息面板
-
-- 顶点/三角形/子网格/索引格式/拓扑
-- 子网格材质分配详情（SubMesh 0: Body_Mat | 12,000 tri）
-- LOD 层级预览（LOD Group 各级别面数/材质数/当前活跃级别高亮）
-- 数据通道可用性（法线/切线/顶点色/UV0-3/骨骼权重）
 
 ---
 
@@ -290,6 +343,8 @@ modelBox 为 Shader 和图形开发者提供**运行时实时、全场景覆盖*
 com.unity.modelbox/
 ├── package.json
 ├── README.md
+├── Documentation~/
+│   └── screenshots/                            # README 截图（Unity 不导入）
 ├── Editor/
 │   ├── ModelBox.Editor.asmdef
 │   ├── Scripts/
@@ -359,7 +414,7 @@ com.unity.modelbox/
 
 | 限制 | 说明 | 缓解方案 |
 |------|------|---------|
-| **仅 URP** | HDRP / Built-in 暂不支持 | 各需 2-3 周，评估需求后考虑 |
+| **仅 URP** | HDRP / Built-in 暂不支持 | / |
 | **UI Canvas (Overlay) 不受覆盖** | v0.6 起几何调试模式已覆盖透明队列物体（水面/玻璃/粒子，以不透明化调试色显示）；但 Screen Space-Overlay 的 UI Canvas 在相机 SRP Pass 之外，仍不在覆盖范围 | 透明层叠统计用 TransparencyLayers 模式；Overlay Canvas 建议临时切为 Screen Space-Camera |
 | **顶点动画丢失** | overrideMaterial 替换整个 Shader，自定义顶点动画丢失 | 这是 overrideMaterial 的根本限制 |
 | **FPS [BETA]** | Editor 中帧率基于时间差近似，非精确帧计数 | 设置中可关闭，仅作参考 |
@@ -370,7 +425,15 @@ com.unity.modelbox/
 
 ## 版本历史
 
-### v0.6.0（当前）
+### v0.6.1（当前）
+- **修复 GPU 加速叠加线框/法线/切线完全不显示**：OverlayLine shader 由 URP HLSL 重写为内置 CG —— SceneView 立即模式（DrawMeshNow）不经过 SRP 渲染流程，URP 的 PerCamera/PerDraw 常量缓冲区不随 GL 矩阵绑定，顶点变换结果被裁剪导致整批不可见；CG 的 UNITY_MATRIX_MVP 直接取当前 GL 状态，与管线无关
+- **修复 GPU 顶点叠加部分顶点/线段不显示、随相机移动闪烁**：移除距离 LOD 抽稀（80m 外曾只画 10%）与 2 万实例强制上限（27K 顶点模型贴脸只显示一半）；视锥剔除余量由硬编码 0.5m 改为顶点球体实际世界半径，屏幕边缘不再闪烁进出
+- **修复 Depth/ShadowMap 屏幕空间模式黑屏/花屏**：ScreenSpaceBlitPass 与 ShadowMapPass 不再绑定相机深度附件 —— MSAA 关闭时其与 _CameraDepthTexture 为同一资源，同时作为深度附件与采样源构成 DSV/SRV 反馈环（D3D11 强制解绑 SRV，采样返回未定义数据）
+- **GPU 加速默认关闭**：叠加默认走 Legacy Handles 路径保证正确性，高面数场景可手动开启
+- **法线/切线长度最小值 0.01 → 0.001**：大模型近距离观察时原最小值仍过长
+- **叠加健壮性**：共享 OverlayLine 材质 _ZTest 改 dirty-check 写入；立即模式绘制增加 Repaint 事件门控；烘焙线网格补 RecalculateBounds
+
+### v0.6.0
 - **几何调试模式透明队列覆盖**：新增透明队列调试 Pass（AfterRenderingTransparents+2 注入），水面/玻璃/粒子/相机空间 UI 等透明队列物体不再保持原样渲染 — 几何数据模式（坐标/法线/UV/顶点色/切线等）实现全场景覆盖；透明物体以不透明化调试色显示，排序与 URP 透明 Pass 一致（CommonTransparent），SEL 仅选中物体模式对透明队列同样生效
 - **模型局部坐标叠加**：网格叠加新增「局部坐标」— 在选中物体原点（pivot）绘制 X/Y/Z 三向轴（红/绿/蓝 + 圆锥箭头 + 轴标签），帮助开发者快速分辨模型局部坐标系朝向；轴长随选中层级合并包围盒自适应，系数可调（0.1~2.0），深度测试遵循叠加深度测试设置
 - **检查页快捷入口**：「局部坐标」加入检查页快捷按钮行（线框/顶点/法线/切线/AABB 同排）；物体页网格叠加标签页提供开关与轴长设置
@@ -418,7 +481,6 @@ com.unity.modelbox/
 - 性能优化：消除 5 项 GC 分配（StringBuilder/GUIStyle/GUIContent/string[]）
 - FPS 计算修复（EditorApplication.timeSinceStartup + dt 钳制 + BETA 标记）
 - BeginChangeCheck/EndChangeCheck GUI 状态栈泄漏修复
-- package.json 作者署名：Sky幻
 
 ### v0.3.1
 - 骨骼侧边栏独立页面（搜索过滤、层级树、权重统计）
