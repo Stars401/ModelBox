@@ -66,8 +66,9 @@ namespace ModelBox
         public float NormalWidth { get; set; } = 1f; // [perf v0.6] 默认细线走烘焙线网格快速路径；>1 为逐线粗线（高面数明显变慢）
         public bool VertexScaleIndependent { get; set; } = true;
 
-        // GPU 加速开关（默认开启）
-        public bool UseGPURendering { get; set; } = true;
+        // [fix] GPU 加速开关默认关闭：烘焙线网格路径在部分环境下输出仍不正确，
+        // 默认走 Legacy Handles 路径保证显示正确；用户可按需手动开启
+        public bool UseGPURendering { get; set; } = false;
 
         // 切线叠加
         public Color TangentColor { get; set; } = new Color(1f, 1f, 0.2f, 0.8f);

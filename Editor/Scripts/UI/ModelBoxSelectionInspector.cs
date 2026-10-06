@@ -580,7 +580,8 @@ namespace ModelBox
                 EditorGUI.indentLevel++;
                 EditorGUI.BeginChangeCheck();
                 manager.NormalColor = EditorGUILayout.ColorField("法线颜色", manager.NormalColor);
-                manager.NormalLength = EditorGUILayout.Slider("法线长度", manager.NormalLength, 0.01f, 0.5f);
+                // [fix] 最小值 0.01→0.001：大模型近距离观察时 0.01 仍过长
+                manager.NormalLength = EditorGUILayout.Slider("法线长度", manager.NormalLength, 0.001f, 0.5f);
                 // [perf v0.6] 明确快速路径与慢路径分界
                 manager.NormalWidth = EditorGUILayout.Slider(
                     new GUIContent("法线粗细", "1 = GPU 烘焙线网格快速路径（高面数模型推荐）；>1 使用逐线粗线绘制，高面数会明显变慢"),
@@ -595,7 +596,8 @@ namespace ModelBox
                 EditorGUI.indentLevel++;
                 EditorGUI.BeginChangeCheck();
                 manager.TangentColor = EditorGUILayout.ColorField("切线颜色", manager.TangentColor);
-                manager.TangentLength = EditorGUILayout.Slider("切线长度", manager.TangentLength, 0.01f, 0.5f);
+                // [fix] 最小值 0.01→0.001：与法线长度保持一致
+                manager.TangentLength = EditorGUILayout.Slider("切线长度", manager.TangentLength, 0.001f, 0.5f);
                 // [perf v0.6] 同法线粗细提示
                 manager.TangentWidth = EditorGUILayout.Slider(
                     new GUIContent("切线粗细", "1 = GPU 烘焙线网格快速路径（高面数模型推荐）；>1 使用逐线粗线绘制，高面数会明显变慢"),

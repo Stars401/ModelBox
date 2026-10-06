@@ -14,7 +14,7 @@ namespace ModelBox
     /// - AABB：Handles.DrawLine（12 条边）
     ///
     /// 优化：
-    /// - LOD：距离远时自动跳过部分顶点/边
+    /// - 视锥剔除：跳过相机视锥外的顶点实例（余量覆盖顶点球体半径，不影响可见结果）
     /// - SkinnedMeshRenderer：BakeMesh 获取蒙皮后顶点
     /// - 边列表缓存：唯一边只构建一次
     /// </summary>
@@ -58,13 +58,10 @@ namespace ModelBox
         private const int MAX_INSTANCES_PER_CALL = 1023;
         private const string VERTEX_SHADER_NAME = "Hidden/ModelBox/OverlayVertex";
 
-        // LOD 参数 [Task 8]
-        private const float LOD_FULL_DIST = 10f;     // < 10m: 全部绘制
-        private const float LOD_HALF_DIST = 30f;     // 10-30m: 跳过 50%
-        private const float LOD_MIN_DIST = 80f;      // > 80m: 跳过 90%
-
-        // [fix] 性能保护：限制单帧最大实例数，防止 100K+ 顶点模型导致 Editor 卡死
-        private const int MAX_OVERLAY_INSTANCES = 20000;
+        // [fix] 已移除距离 LOD 抽稀与单帧实例数上限：调试叠加必须全量显示。
+        // 原实现按距离分档（80m 外只画 10%）且超 20000 元素强制抽稀（27K 顶点模型只显示一半），
+        // 阈值跳变导致相机移动时叠加忽多忽少 —— 调试数据不完整即误导。
+        // GPU 路径（烘焙线网格 + 1023/批实例化）无逐基元 CPU 开销，全量绘制与 Legacy 输出一致。
 
         // ========== 公开 API ==========
 
@@ -317,6 +314,9 @@ namespace ModelBox
             };
             if (data.Vertices.Length > 65535) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
             mesh.SetIndices(data.EdgeIndices, MeshTopology.Lines, 0, false);
+            // [fix] DrawMeshNow 不做视锥剔除（bounds 非必需），但保留有效 bounds 以避免
+            // 调试器/Future 路径读到退化包围盒（默认 bounds 为零尺寸）
+            mesh.RecalculateBounds();
             data.WireframeLineMesh = mesh;
             s_trackedLineMeshes.Add(mesh);
             return mesh;
@@ -375,6 +375,8 @@ namespace ModelBox
             mesh.normals = nrm;
             mesh.uv = uv;
             mesh.SetIndices(idx, MeshTopology.Lines, 0, false);
+            // [fix] 同线框网格：DrawMeshNow 不剔除，仅保证 bounds 有效（不含拉伸量，无实际影响）
+            mesh.RecalculateBounds();
 
             if (tangents) data.TangentLineMesh = mesh;
             else data.NormalLineMesh = mesh;
@@ -382,10 +384,16 @@ namespace ModelBox
             return mesh;
         }
 
+        // [fix] 共享 OverlayLine 材质的 _ZTest 状态跟踪（dirty check）：
+        // 原实现每次获取材质都无条件 SetInt —— 同一帧内多个 Renderer × 多种叠加（线框/法线/切线）
+        // 会重复写入同一材质，纯属浪费；且立即模式绘制下后写覆盖先写，绘制顺序即正确性。
+        // 收敛为：仅在取值变化时写入，并在 SetPass 前完成。
+        private static int _overlayLineZTest = -1;
+
         /// <summary>
-        /// [perf v0.6] 获取/初始化 OverlayLine 材质（单实例，_ZTest 按次切换，沿用 BoneWeight 材质范式）。
+        /// [perf v0.6] 获取/初始化 OverlayLine 材质（单实例，_ZTest 由 DrawOverlayLineMesh 按需切换）。
         /// </summary>
-        private static Material GetOverlayLineMaterial(bool depthTest)
+        private static Material GetOverlayLineMaterial()
         {
             var shader = Shader.Find("Hidden/ModelBox/OverlayLine");
             if (shader == null)
@@ -394,8 +402,10 @@ namespace ModelBox
                 return null;
             }
             if (s_overlayLineMat == null || s_overlayLineMat.shader != shader)
+            {
                 s_overlayLineMat = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
-            s_overlayLineMat.SetInt("_ZTest", (int)(depthTest ? CompareFunction.LessEqual : CompareFunction.Always));
+                _overlayLineZTest = -1; // 新材质：强制下一次绘制写入 _ZTest
+            }
             return s_overlayLineMat;
         }
 
@@ -406,13 +416,25 @@ namespace ModelBox
         public static void DrawOverlayLineMesh(Mesh lineMesh, Matrix4x4 localToWorld, Camera camera,
             Color color, float stretchLength, bool depthTest)
         {
-            var mat = GetOverlayLineMaterial(depthTest);
+            // [fix] 立即模式绘制仅在 Repaint 事件有效（与 Handles.DrawLine 一致）；
+            // Layout/MouseMove 等事件中 DrawMeshNow 无渲染目标，纯浪费且可能产生告警
+            if (Event.current == null || Event.current.type != EventType.Repaint) return;
+
+            var mat = GetOverlayLineMaterial();
             if (mat == null || lineMesh == null) return;
 
+            int zTest = (int)(depthTest ? CompareFunction.LessEqual : CompareFunction.Always);
+            if (_overlayLineZTest != zTest)
+            {
+                mat.SetInt("_ZTest", zTest);
+                _overlayLineZTest = zTest;
+            }
             mat.SetColor("_Color", color);
             mat.SetFloat("_Length", stretchLength);
 
-            // 显式设置 SceneView 相机矩阵（duringSceneGui 期间 GL 状态），确保绘制落在正确相机空间
+            // 显式设置 SceneView 相机矩阵（duringSceneGui 期间 GL 状态），确保绘制落在正确相机空间。
+            // CG shader 的 UNITY_MATRIX_MVP = GL.projection × GL.modelview × DrawMeshNow 矩阵
+            // = projection × (worldToCamera × localToWorld) × identity，数学自洽。
             GL.PushMatrix();
             GL.LoadProjectionMatrix(camera.projectionMatrix);
             GL.modelview = camera.worldToCameraMatrix * localToWorld;
@@ -441,6 +463,7 @@ namespace ModelBox
 
             // [perf 3.1] 视锥剔除：跳过相机视锥外的顶点，大幅减少近距离 draw call
             GeometryUtility.CalculateFrustumPlanes(camera, _frustumPlanesCache);
+            float cullMargin = ComputeVertexSphereWorldRadius(size, scaleIndependent, localToWorld);
             int maxInstances = (count + lodStep - 1) / lodStep;
             EnsureInstanceBuffer(maxInstances);
 
@@ -451,7 +474,7 @@ namespace ModelBox
                 for (int i = 0; i < count; i += lodStep)
                 {
                     Vector3 wp = localToWorld.MultiplyPoint3x4(verts[i]);
-                    if (!IsPointInFrustum(_frustumPlanesCache, wp)) continue;
+                    if (!IsPointInFrustum(_frustumPlanesCache, wp, cullMargin)) continue;
                     _instanceMatrices[idx++] = Matrix4x4.TRS(wp, Quaternion.identity, s);
                 }
             }
@@ -461,7 +484,7 @@ namespace ModelBox
                 for (int i = 0; i < count; i += lodStep)
                 {
                     Vector3 wp = localToWorld.MultiplyPoint3x4(verts[i]);
-                    if (!IsPointInFrustum(_frustumPlanesCache, wp)) continue;
+                    if (!IsPointInFrustum(_frustumPlanesCache, wp, cullMargin)) continue;
                     _instanceMatrices[idx++] = localToWorld * Matrix4x4.TRS(verts[i], Quaternion.identity, scale);
                 }
             }
@@ -613,6 +636,7 @@ namespace ModelBox
 
             // [perf 3.1] 视锥剔除 + 权重过滤
             GeometryUtility.CalculateFrustumPlanes(camera, _frustumPlanesCache);
+            float cullMargin = ComputeVertexSphereWorldRadius(size, scaleIndependent, localToWorld);
             int maxInstances = (vertCount + lodStep - 1) / lodStep;
             EnsureInstanceBuffer(maxInstances);
             if (_weightColorBuffer == null || _weightColorBuffer.Length < maxInstances)
@@ -627,7 +651,7 @@ namespace ModelBox
                     float w = vertexWeights[i];
                     if (displayMode == BoneWeightDisplayMode.Threshold && w < threshold) continue;
                     Vector3 wp = localToWorld.MultiplyPoint3x4(verts[i]);
-                    if (!IsPointInFrustum(_frustumPlanesCache, wp)) continue;
+                    if (!IsPointInFrustum(_frustumPlanesCache, wp, cullMargin)) continue;
                     _instanceMatrices[idx] = Matrix4x4.TRS(wp, Quaternion.identity, s);
                     _weightColorBuffer[idx] = WeightToHeatmap(w);
                     idx++;
@@ -641,7 +665,7 @@ namespace ModelBox
                     float w = vertexWeights[i];
                     if (displayMode == BoneWeightDisplayMode.Threshold && w < threshold) continue;
                     Vector3 wp = localToWorld.MultiplyPoint3x4(verts[i]);
-                    if (!IsPointInFrustum(_frustumPlanesCache, wp)) continue;
+                    if (!IsPointInFrustum(_frustumPlanesCache, wp, cullMargin)) continue;
                     _instanceMatrices[idx] = localToWorld * Matrix4x4.TRS(verts[i], Quaternion.identity, scale);
                     _weightColorBuffer[idx] = WeightToHeatmap(w);
                     idx++;
@@ -683,15 +707,34 @@ namespace ModelBox
             return new Color(r, g, b, 1f);
         }
 
-        /// <summary>测试世界空间点是否在相机视锥内（含 margin 膨胀）。</summary>
-        private static bool IsPointInFrustum(Plane[] planes, Vector3 worldPos)
+        /// <summary>
+        /// 测试世界空间点是否在相机视锥内。
+        /// [fix] margin 必须为顶点球体的实际世界半径（原硬编码 0.5m）——余量不足时
+        /// 相机平移/旋转会让屏幕边缘的顶点球提前消失、随后恢复（可见的闪烁进出）。
+        /// </summary>
+        private static bool IsPointInFrustum(Plane[] planes, Vector3 worldPos, float margin)
         {
             for (int p = 0; p < planes.Length; p++)
             {
-                if (planes[p].GetDistanceToPoint(worldPos) < -0.5f) // 0.5m margin for vertex sphere size
+                if (planes[p].GetDistanceToPoint(worldPos) < -margin)
                     return false;
             }
             return true;
+        }
+
+        /// <summary>取矩阵三个基向量长度的最大值，作为保守的世界缩放近似（用于剔除余量）。</summary>
+        private static float MaxScaleComponent(Matrix4x4 m)
+        {
+            float sx = new Vector3(m.m00, m.m10, m.m20).magnitude;
+            float sy = new Vector3(m.m01, m.m11, m.m21).magnitude;
+            float sz = new Vector3(m.m02, m.m12, m.m22).magnitude;
+            return Mathf.Max(sx, Mathf.Max(sy, sz));
+        }
+
+        /// <summary>顶点球体（单位半径 1 的 Ico 球）在实例矩阵下的世界半径，用作视锥剔除余量。</summary>
+        private static float ComputeVertexSphereWorldRadius(float size, bool scaleIndependent, Matrix4x4 localToWorld)
+        {
+            return scaleIndependent ? size : size * MaxScaleComponent(localToWorld);
         }
 
         /// <summary>
@@ -810,6 +853,7 @@ namespace ModelBox
                 if (lm != null) Object.DestroyImmediate(lm);
             s_trackedLineMeshes.Clear();
             if (s_overlayLineMat != null) { Object.DestroyImmediate(s_overlayLineMat); s_overlayLineMat = null; }
+            _overlayLineZTest = -1;
             _boneWeightTempMeshHash = 0;
             _lastSurfaceWeights = null;
             _instanceMatrices = null;
@@ -911,38 +955,16 @@ namespace ModelBox
         // ========== LOD [Task 8] ==========
 
         /// <summary>
-        /// 根据物体到相机的距离计算边的 LOD 步长。
-        /// 使用 Renderer.bounds.center（世界空间包围盒中心）而非 transform 原点，兼容偏移 pivot。
-        /// 1 = 全精度，2 = 每隔 1 条，3 = 每隔 2 条...
+        /// 叠加密度步长，恒为 1（全量绘制）。
+        /// [fix] 调试叠加不允许按距离/数量抽稀：静默丢弃顶点/边会让 GPU 路径输出 ≠ Legacy，
+        /// 且阈值跳变导致相机移动时叠加忽多忽少。保留函数签名以收敛改动面。
         /// </summary>
         private static int ComputeEdgeLODStep(Bounds worldBounds, Camera camera, int elementCount = 0)
         {
-            if (camera == null) return 1;
-
-            float dist = Vector3.Distance(camera.transform.position, worldBounds.center);
-            int step;
-            if (dist <= LOD_FULL_DIST) step = 1;
-            else if (dist >= LOD_MIN_DIST) step = 10;
-            else
-            {
-                float t = Mathf.InverseLerp(LOD_FULL_DIST, LOD_MIN_DIST, dist);
-                step = Mathf.Max(1, Mathf.RoundToInt(Mathf.Lerp(1f, 10f, t)));
-            }
-
-            // [fix] 性能保护：当元素数量超过上限时，动态增大步长
-            if (elementCount > 0)
-            {
-                int estimated = (elementCount + step - 1) / step;
-                if (estimated > MAX_OVERLAY_INSTANCES)
-                    step = Mathf.CeilToInt((float)elementCount / MAX_OVERLAY_INSTANCES);
-            }
-
-            return step;
+            return 1;
         }
 
-        /// <summary>
-        /// 根据物体到相机的距离计算顶点的 LOD 步长。
-        /// </summary>
+        /// <summary>顶点密度步长，恒为 1（同 ComputeEdgeLODStep 的说明）。</summary>
         private static int ComputeVertexLODStep(Bounds worldBounds, Camera camera, int elementCount = 0)
         {
             return ComputeEdgeLODStep(worldBounds, camera, elementCount);

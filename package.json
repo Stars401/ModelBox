@@ -1,6 +1,6 @@
 {
     "name": "com.unity.modelbox",
-    "version": "0.6.0",
+    "version": "0.6.1",
     "displayName": "modelBox",
     "description": "Professional shader debugging and visualization toolkit for Unity URP. 35 debug view modes covering geometry, PBR diagnostics, lighting separation, derivative analysis. GPU-accelerated mesh overlays, shader introspection, material sandbox, bone weight visualization, split-screen comparison, and SceneView pixel inspection.",
     "unity": "2021.3",

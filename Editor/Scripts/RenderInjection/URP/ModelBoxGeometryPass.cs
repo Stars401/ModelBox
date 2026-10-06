@@ -820,8 +820,11 @@ namespace ModelBox
         {
             _cameraColorHandle = colorTarget;
             _cameraDepthHandle = depthTarget;
+            // [fix] 仅绑定颜色目标：本 Pass 采样 _CameraDepthTexture，MSAA 关闭时它与
+            // cameraDepthTargetHandle 为同一资源，同时绑定为深度附件构成 DSV/SRV 反馈环
+            //（D3D11 强制解绑 SRV → 采样返回 0/未定义）。ZWrite Off + ZTest Always 无需深度。
             if (colorTarget != null)
-                ConfigureTarget(colorTarget, depthTarget);
+                ConfigureTarget(colorTarget);
         }
 #else
         private RenderTargetIdentifier _cameraColorTarget;
@@ -831,7 +834,8 @@ namespace ModelBox
         {
             _cameraColorTarget = colorTarget;
             _cameraDepthTarget = depthTarget;
-            ConfigureTarget(colorTarget, depthTarget);
+            // [fix] 同上：不绑定深度附件，避免与 _CameraDepthTexture 采样构成反馈环
+            ConfigureTarget(colorTarget);
         }
 #endif
 

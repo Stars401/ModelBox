@@ -540,12 +540,14 @@ namespace ModelBox
                         if ((flags & MeshOverlayFlags.Normals) != 0)
                         {
                             selManager.NormalColor = EditorGUILayout.ColorField("法线颜色", selManager.NormalColor);
-                            selManager.NormalLength = EditorGUILayout.Slider("法线长度", selManager.NormalLength, 0.01f, 0.5f);
+                            // [fix] 最小值 0.01→0.001：大模型近距离观察时 0.01 仍过长
+                            selManager.NormalLength = EditorGUILayout.Slider("法线长度", selManager.NormalLength, 0.001f, 0.5f);
                         }
                         if ((flags & MeshOverlayFlags.Tangents) != 0)
                         {
                             selManager.TangentColor = EditorGUILayout.ColorField("切线颜色", selManager.TangentColor);
-                            selManager.TangentLength = EditorGUILayout.Slider("切线长度", selManager.TangentLength, 0.01f, 0.5f);
+                            // [fix] 最小值 0.01→0.001：与法线长度保持一致
+                            selManager.TangentLength = EditorGUILayout.Slider("切线长度", selManager.TangentLength, 0.001f, 0.5f);
                         }
                         if ((flags & MeshOverlayFlags.Bounds) != 0)
                             selManager.BoundsColor = EditorGUILayout.ColorField("AABB 颜色", selManager.BoundsColor);
