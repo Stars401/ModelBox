@@ -1,8 +1,14 @@
-# AI assistant context
+# AI assistant context / working caches
 .claude/
 .codely/
 .codely-cli/
+.zcode/
 CODELY.md
+CODELY.md.meta
+
+# AI session memory logs
+mem-log/
+mem-log.meta
 
 # Internal workflow plans (not part of the tool)
 Plan/
