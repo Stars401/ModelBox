@@ -25,3 +25,4 @@ Plan.meta
 *.DS_Store
 *.tmp
 *.log
+dist~/

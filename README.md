@@ -37,6 +37,14 @@ modelBox 为 材质开发者提供**运行时实时、全场景覆盖**的调试
 
 将整个文件夹复制到项目的 `Packages/com.unity.modelbox/` 目录下。
 
+### 方式三：unitypackage / zip 离线导入
+
+1. 从 [Releases](https://github.com/Stars401/ModelBox/releases) 下载对应产物
+2. **unitypackage**：Unity 菜单 `Assets > Import Package > Custom Package...` 选择文件后全选导入，工具位于 `Assets/modelBox/`
+3. **zip**：解压到项目的 `Packages/` 目录，或解压到任意位置后按方式一 `Add package from disk`
+
+> 三种方式携带同一套 `.meta`（GUID 一致），可无缝互换与升级；发行包由仓库内 `Tools~/build_package.py` 生成。
+
 ### 首次配置
 
 1. 打开 `Tools > modelBox`
