@@ -48,6 +48,7 @@ namespace ModelBox
 
         // [feat] 工具栏拖拽状态
         private static int _toolbarDragId = -1;
+        private static readonly int _toolbarGripHash = "ModelBoxToolbarGrip".GetHashCode();
         private static Vector2 _toolbarDragOffset;
         private static readonly GUIContent _snapContent = new GUIContent("Snap", "操作区 | 截取 SceneView 快照");
 
@@ -137,14 +138,12 @@ namespace ModelBox
                 },
             };
 
-            SceneView.duringSceneGui += OnSceneGUI;
             AssemblyReloadEvents.beforeAssemblyReload += Cleanup;
         }
 
         // [fix H2] 域重载前取消事件订阅，防止 handler 叠加
         private static void Cleanup()
         {
-            SceneView.duringSceneGui -= OnSceneGUI;
             var manager = ModelBoxManager.Instance;
             if (manager != null) manager.OnModeChanged -= OnModeChanged;
             _subscribedModeChange = false;
@@ -289,9 +288,10 @@ namespace ModelBox
 
         // ==================== GUI 绘制 ====================
 
-        private static void OnSceneGUI(SceneView sceneView)
+        internal static void OnSceneGUI(SceneView sceneView)
         {
             EnsureModeSubscription(); // 延迟订阅模式变更
+            _cachedPerfHudRect = default;
             var manager = ModelBoxManager.Instance;
             if (manager == null) return;
 
@@ -320,28 +320,38 @@ namespace ModelBox
                 EditorGUIUtility.AddCursorRect(gripRect, MouseCursor.MoveArrow);
 
                 var e = Event.current;
-                if (e.type == EventType.MouseDown && gripRect.Contains(e.mousePosition))
+                int toolbarControlId = GUIUtility.GetControlID(_toolbarGripHash, FocusType.Passive);
+                switch (e.GetTypeForControl(toolbarControlId))
                 {
-                    _toolbarDragId = GUIUtility.GetControlID(FocusType.Passive);
-                    GUIUtility.hotControl = _toolbarDragId;
-                    _toolbarDragOffset = e.mousePosition - new Vector2(tbX, tbY);
-                    e.Use();
+                    case EventType.MouseDown:
+                        if (e.button == 0 && GUIUtility.hotControl == 0 && gripRect.Contains(e.mousePosition))
+                        {
+                            _toolbarDragId = toolbarControlId;
+                            GUIUtility.hotControl = toolbarControlId;
+                            _toolbarDragOffset = e.mousePosition - new Vector2(tbX, tbY);
+                            e.Use();
+                        }
+                        break;
+                    case EventType.MouseDrag:
+                        if (GUIUtility.hotControl == toolbarControlId && _toolbarDragId == toolbarControlId)
+                        {
+                            tbX = e.mousePosition.x - _toolbarDragOffset.x;
+                            tbY = e.mousePosition.y - _toolbarDragOffset.y;
+                            settings.ToolbarX = tbX;
+                            settings.ToolbarY = tbY;
+                            settings.Save();
+                            e.Use();
+                        }
+                        break;
+                    case EventType.MouseUp:
+                        if (GUIUtility.hotControl == toolbarControlId && _toolbarDragId == toolbarControlId)
+                        {
+                            GUIUtility.hotControl = 0;
+                            _toolbarDragId = -1;
+                            e.Use();
+                        }
+                        break;
                 }
-                if (e.type == EventType.MouseDrag && GUIUtility.hotControl == _toolbarDragId)
-                {
-                    tbX = e.mousePosition.x - _toolbarDragOffset.x;
-                    tbY = e.mousePosition.y - _toolbarDragOffset.y;
-                    settings.ToolbarX = tbX;
-                    settings.ToolbarY = tbY;
-                    settings.Save();
-                    e.Use();
-                }
-                if (e.type == EventType.MouseUp && GUIUtility.hotControl == _toolbarDragId)
-                {
-                    GUIUtility.hotControl = 0;
-                _toolbarDragId = -1;
-                e.Use();
-            }
 
             var toolbarBg = EditorGUIUtility.isProSkin
                 ? new Color(0.19f, 0.19f, 0.19f, 0.95f)
@@ -561,6 +571,7 @@ namespace ModelBox
             // ===== 左下角统计 HUD =====
             DrawPerformanceStatsHUD();
             DrawMeshStatsHUD();
+            ModelBoxSceneGUI.BlockSceneInput(new Rect(tbX, tbY, toolbarWidth, toolbarHeight), toolbarControlId);
             }
             finally
             {
@@ -572,6 +583,7 @@ namespace ModelBox
         // ===== 分屏分割线 =====
 
         private static int _splitDragControlId = -1;
+        private static readonly int _splitDividerHash = "ModelBoxSplitDivider".GetHashCode();
 
         /// <summary>
         /// 绘制可拖拽的分屏分割线。使用 GUIUtility.hotControl 消耗鼠标事件，
@@ -600,13 +612,13 @@ namespace ModelBox
             }
 
             // 鼠标拖拽处理
-            var controlId = GUIUtility.GetControlID(FocusType.Passive);
+            var controlId = GUIUtility.GetControlID(_splitDividerHash, FocusType.Passive);
             var e = Event.current;
 
-            switch (e.type)
+            switch (e.GetTypeForControl(controlId))
             {
                 case EventType.MouseDown:
-                    if (handleRect.Contains(e.mousePosition))
+                    if (e.button == 0 && GUIUtility.hotControl == 0 && handleRect.Contains(e.mousePosition))
                     {
                         // [feat] 双击重置到 50%
                         if (e.clickCount == 2)
@@ -624,7 +636,7 @@ namespace ModelBox
                     break;
 
                 case EventType.MouseDrag:
-                    if (_splitDragControlId == controlId)
+                    if (GUIUtility.hotControl == controlId && _splitDragControlId == controlId)
                     {
                         // [fix] 限制拖拽范围 5%~95%（防止分割线完全消失）
                         float newPos = Mathf.Clamp(e.mousePosition.x / viewRect.width, 0.05f, 0.95f);
@@ -641,7 +653,7 @@ namespace ModelBox
                     break;
 
                 case EventType.MouseUp:
-                    if (_splitDragControlId == controlId)
+                    if (GUIUtility.hotControl == controlId && _splitDragControlId == controlId)
                     {
                         _splitDragControlId = -1;
                         GUIUtility.hotControl = 0;
@@ -649,6 +661,7 @@ namespace ModelBox
                     }
                     break;
             }
+            ModelBoxSceneGUI.BlockSceneInput(handleRect, controlId);
 
             // 左右标签
             var labelStyle = EditorStyles.miniLabel;
@@ -749,8 +762,7 @@ namespace ModelBox
 
             var viewRect = sv.cameraViewport;
 
-            // [fix] 锚定在 PixelBar 上方（PixelBar 高 38px + 2px 底部偏移 = 40px）
-            float pixelBarZone = 42f; // PixelBar 占用的底部空间 + 4px 间距
+            float pixelBarZone = settings.ShowPixelBar ? ModelBoxPixelBar.BarHeight + 4f : 4f;
             float y = viewRect.height - hudHeight - pixelBarZone;
 
             var hudRect = new Rect(8, y, hudWidth, hudHeight);
@@ -763,6 +775,8 @@ namespace ModelBox
             EditorGUI.DrawRect(accentRect, _perfAccentColor);
 
             GUI.Label(hudRect, _perfContent, _perfStyle);
+            int controlId = GUIUtility.GetControlID(732023, FocusType.Passive);
+            ModelBoxSceneGUI.BlockSceneInput(hudRect, controlId);
         }
 
         // ===== Mesh 统计 HUD（左下角）=====
@@ -823,9 +837,11 @@ namespace ModelBox
             var currentSv = SceneView.currentDrawingSceneView;
             if (currentSv == null) return;
             var viewRect = currentSv.cameraViewport;
+            var settings = ModelBoxSettings.GetOrCreate();
+            float pixelBarZone = settings.ShowPixelBar ? ModelBoxPixelBar.BarHeight + 4f : 4f;
             float anchorTop = _cachedPerfHudRect.height > 0
                 ? _cachedPerfHudRect.y      // Performance HUD 顶部
-                : viewRect.height - 42f;    // 无 Performance HUD 时的回退位置
+                : viewRect.height - pixelBarZone;
             float y = Mathf.Max(8, anchorTop - hudHeight - 4);
             var hudRect = new Rect(8, y, hudWidth, hudHeight);
 
@@ -836,6 +852,8 @@ namespace ModelBox
             EditorGUI.DrawRect(accentRect, _hudAccentColor);
 
             GUI.Label(hudRect, _hudContent, _hudStyle);
+            int controlId = GUIUtility.GetControlID(732024, FocusType.Passive);
+            ModelBoxSceneGUI.BlockSceneInput(hudRect, controlId);
         }
 
         private static string BuildHudText(Transform selected)

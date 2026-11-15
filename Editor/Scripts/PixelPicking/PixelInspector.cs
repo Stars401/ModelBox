@@ -10,7 +10,7 @@ namespace ModelBox
     public struct PixelInfo
     {
         public Color Color;
-        public float Depth;
+        public float Depth; // 无可验证的深度时为 NaN。
         public string DecodedString;
         public bool IsValid;
     }
@@ -36,20 +36,24 @@ namespace ModelBox
         // LOGIC-1 修正：保存临时 RT 引用，在回调完成后释放
         private static RenderTexture _pendingTempRT;
         private static Color _asyncPixelColor;
+        private static AsyncGPUReadbackRequest _pendingRequest;
+        private static DebugViewMode _pendingMode;
+        private static ModelBoxParameters _pendingParameters;
+        private static GUIStyle _tooltipStyle;
 
         static PixelInspector()
         {
-            SceneView.duringSceneGui += OnSceneGUI;
             AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
         }
 
         private static void OnBeforeAssemblyReload()
         {
             // [fix v0.4] 取消所有事件订阅（包括自身），防止域重载后 handler 叠加泄漏
-            SceneView.duringSceneGui -= OnSceneGUI;
             AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
             MeshRaycastUtility.Cleanup();
 
+            if (_gpuReadbackPending)
+                _pendingRequest.WaitForCompletion();
             if (_pendingTempRT != null)
             {
                 RenderTexture.ReleaseTemporary(_pendingTempRT);
@@ -58,12 +62,13 @@ namespace ModelBox
             _gpuReadbackPending = false;
         }
 
-        private static void OnSceneGUI(SceneView sceneView)
+        internal static void OnSceneGUI(SceneView sceneView)
         {
             var manager = ModelBoxManager.Instance;
             if (manager == null || manager.CurrentMode == DebugViewMode.None)
             {
                 _decodedInfo = "";
+                LastPixelInfo = default;
                 return;
             }
 
@@ -71,6 +76,7 @@ namespace ModelBox
             if (settings != null && !settings.ShowPixelInspector) return;
 
             Event e = Event.current;
+            if (e == null) return;
             Vector2 mousePos = e.mousePosition;
 
             // 节流：每 150ms 采样一次
@@ -89,7 +95,6 @@ namespace ModelBox
                     Vector2 tooltipPos = mousePos + new Vector2(18, 18);
 
                     var content = new GUIContent(_decodedInfo);
-                    var size = GUI.skin.label.CalcSize(content);
                     // 使用 cameraViewport 获取正确的 IMGUI 可用区域
                     // 注意：Handles.BeginGUI() 的坐标系对应 camera viewport（不含 toolbar），
                     // sceneView.position.height 包含 toolbar 高度，不能用于 GUI 坐标。
@@ -97,14 +102,19 @@ namespace ModelBox
                     var cam = sceneView.camera;
                     float vpW = vr.width > 0 ? vr.width : (cam != null ? cam.pixelWidth : vr.width);
                     float vpH = vr.height > 0 ? vr.height : (cam != null ? cam.pixelHeight : vr.height);
-                    float maxX = vpW - size.x - 20;
-                    float maxY = vpH - size.y - 20;
-                    tooltipPos.x = Mathf.Clamp(tooltipPos.x, 0, maxX);
-                    tooltipPos.y = Mathf.Clamp(tooltipPos.y, 0, maxY);
+                    if (_tooltipStyle == null)
+                        _tooltipStyle = new GUIStyle(ModelBoxStyles.PixelTooltipStyle)
+                        { wordWrap = true, clipping = TextClipping.Clip };
+                    float width = Mathf.Min(_tooltipStyle.CalcSize(content).x, Mathf.Max(1f, vpW - 8f));
+                    float height = Mathf.Min(_tooltipStyle.CalcHeight(content, width), Mathf.Max(1f, vpH - 8f));
+                    tooltipPos.x = Mathf.Clamp(tooltipPos.x, 0, Mathf.Max(0, vpW - width));
+                    tooltipPos.y = Mathf.Clamp(tooltipPos.y, 0, Mathf.Max(0, vpH - height));
 
-                    var tooltipRect = new Rect(tooltipPos.x, tooltipPos.y, size.x + 12, size.y + 6);
-                    GUI.Box(tooltipRect, GUIContent.none, ModelBoxStyles.PixelTooltipStyle);
-                    GUI.Label(tooltipRect, content, ModelBoxStyles.PixelTooltipStyle);
+                    var tooltipRect = new Rect(tooltipPos.x, tooltipPos.y, width, height);
+                    GUI.Box(tooltipRect, GUIContent.none, _tooltipStyle);
+                    GUI.Label(tooltipRect, content, _tooltipStyle);
+                    int controlId = GUIUtility.GetControlID(732025, FocusType.Passive);
+                    ModelBoxSceneGUI.BlockSceneInput(tooltipRect, controlId);
                 }
                 finally
                 {
@@ -118,34 +128,39 @@ namespace ModelBox
         {
             var camera = sceneView.camera;
             if (camera == null) return;
+            if (_gpuReadbackPending) return;
 
             // 方式1：AsyncGPUReadback（如果可用）
-            if (SystemInfo.supportsAsyncGPUReadback && !_gpuReadbackPending)
+            if (SystemInfo.supportsAsyncGPUReadback && camera.targetTexture != null
+                && camera.targetTexture.antiAliasing == 1)
             {
-                TryAsyncReadback(camera, mousePos);
+                TryAsyncReadback(sceneView, mousePos);
                 return;
             }
 
             // 方式2：CPU Raycast 降级方案
             TryRaycastFallback(sceneView, mousePos);
+            _decodedInfo = "CPU " + _decodedInfo;
+            LastPixelInfo = default;
         }
 
-        private static void TryAsyncReadback(Camera camera, Vector2 mousePos)
+        private static Vector2Int GetReadbackPixel(Vector2 mousePos, Vector2 viewportSize, Vector2Int targetSize)
         {
+            int x = Mathf.FloorToInt(mousePos.x / Mathf.Max(1f, viewportSize.x) * targetSize.x);
+            int y = targetSize.y - 1 - Mathf.FloorToInt(mousePos.y / Mathf.Max(1f, viewportSize.y) * targetSize.y);
+            return new Vector2Int(Mathf.Clamp(x, 0, targetSize.x - 1), Mathf.Clamp(y, 0, targetSize.y - 1));
+        }
+
+        private static void TryAsyncReadback(SceneView sceneView, Vector2 mousePos)
+        {
+            var camera = sceneView.camera;
             var activeRT = camera.targetTexture;
 
-            // targetTexture 为 null 时，走 Raycast 降级
-            if (activeRT == null)
-            {
-                var sv = SceneView.lastActiveSceneView;
-                if (sv != null)
-                    TryRaycastFallback(sv, mousePos);
-                return;
-            }
-
-            // 计算像素坐标（SceneView 坐标系 Y 翻转）
-            int px = Mathf.Clamp((int)mousePos.x, 0, activeRT.width - 1);
-            int py = Mathf.Clamp((int)(activeRT.height - mousePos.y), 0, activeRT.height - 1);
+            // Scene GUI 使用逻辑点，目标 RT 使用实际像素，同时兼容高 DPI 和渲染缩放。
+            var viewportSize = sceneView.cameraViewport.size;
+            if (viewportSize.x <= 0 || viewportSize.y <= 0)
+                viewportSize = new Vector2(camera.pixelWidth, camera.pixelHeight) / EditorGUIUtility.pixelsPerPoint;
+            var pixel = GetReadbackPixel(mousePos, viewportSize, new Vector2Int(activeRT.width, activeRT.height));
 
             // LOGIC-1 修正：创建一个持久的临时 RT，不在请求后立即释放
             var desc = activeRT.descriptor;
@@ -153,50 +168,79 @@ namespace ModelBox
             desc.height = 1;
             desc.depthBufferBits = 0;
             desc.msaaSamples = 1;
+            desc.useMipMap = false;
+            desc.autoGenerateMips = false;
 
             var tempRT = RenderTexture.GetTemporary(desc);
             tempRT.name = "_PixelInspectorTemp";
 
             var cmd = CommandBufferPool.Get("PixelInspector");
-            cmd.CopyTexture(activeRT, 0, 0, px, py, 1, 1, tempRT, 0, 0, 0, 0);
-            Graphics.ExecuteCommandBuffer(cmd);
-            CommandBufferPool.Release(cmd);
+            try
+            {
+                cmd.CopyTexture(activeRT, 0, 0, pixel.x, pixel.y, 1, 1, tempRT, 0, 0, 0, 0);
+                Graphics.ExecuteCommandBuffer(cmd);
+            }
+            catch
+            {
+                RenderTexture.ReleaseTemporary(tempRT);
+                throw;
+            }
+            finally
+            {
+                CommandBufferPool.Release(cmd);
+            }
 
             // 保存 RT 引用，延迟到回调中释放
             _pendingTempRT = tempRT;
-            AsyncGPUReadback.Request(tempRT, 0, TextureFormat.RGBA32, OnReadbackComplete);
+            var manager = ModelBoxManager.Instance;
+            _pendingMode = manager != null ? manager.CurrentMode : DebugViewMode.None;
+            _pendingParameters = manager != null ? manager.CurrentParameters : ModelBoxParameters.Default;
             _gpuReadbackPending = true;
+            try
+            {
+                _pendingRequest = AsyncGPUReadback.Request(tempRT, 0, TextureFormat.RGBA32, OnReadbackComplete);
+            }
+            catch
+            {
+                _gpuReadbackPending = false;
+                RenderTexture.ReleaseTemporary(_pendingTempRT);
+                _pendingTempRT = null;
+                throw;
+            }
         }
 
         private static void OnReadbackComplete(AsyncGPUReadbackRequest request)
         {
-            _gpuReadbackPending = false;
-
-            // LOGIC-1：在回调中释放临时 RT
-            if (_pendingTempRT != null)
+            try
             {
-                RenderTexture.ReleaseTemporary(_pendingTempRT);
-                _pendingTempRT = null;
-            }
-
-            if (request.hasError) return;
-
-            var data = request.GetData<Color>();
-            if (data.Length > 0)
-            {
-                _asyncPixelColor = data[0];
-
-                var manager = ModelBoxManager.Instance;
-                if (manager != null)
+                if (request.hasError)
                 {
-                    _decodedInfo = DecodePixel(_asyncPixelColor, manager.CurrentMode);
+                    LastPixelInfo = default;
+                    _decodedInfo = "Screen RGBA: unavailable";
+                    return;
+                }
+
+                var data = request.GetData<Color32>();
+                if (data.Length > 0)
+                {
+                    _asyncPixelColor = data[0];
+                    _decodedInfo = DecodePixel(_asyncPixelColor, _pendingMode, _pendingParameters);
                     LastPixelInfo = new PixelInfo
                     {
                         Color = _asyncPixelColor,
-                        Depth = _asyncPixelColor.r,
+                        Depth = float.NaN,
                         DecodedString = _decodedInfo,
                         IsValid = true,
                     };
+                }
+            }
+            finally
+            {
+                _gpuReadbackPending = false;
+                if (_pendingTempRT != null)
+                {
+                    RenderTexture.ReleaseTemporary(_pendingTempRT);
+                    _pendingTempRT = null;
                 }
             }
         }
@@ -294,36 +338,11 @@ namespace ModelBox
             }
         }
 
-        private static string DecodePixel(Color color, DebugViewMode mode)
+        private static string DecodePixel(Color color, DebugViewMode mode, ModelBoxParameters parameters)
         {
-            switch (mode)
-            {
-                case DebugViewMode.WorldNormal:
-                case DebugViewMode.LocalNormal:
-                    var normal = new Vector3(
-                        color.r * 2f - 1f,
-                        color.g * 2f - 1f,
-                        color.b * 2f - 1f
-                    );
-                    return $"N: ({normal.x:F3}, {normal.y:F3}, {normal.z:F3})";
-
-                case DebugViewMode.UV0:
-                case DebugViewMode.UV1:
-                    return $"UV: ({color.r:F3}, {color.g:F3})";
-
-                case DebugViewMode.Depth:
-                    return $"Depth: {color.r:F4} (linear)";
-
-                case DebugViewMode.VertexColor:
-                    return $"RGBA: ({color.r:F2}, {color.g:F2}, {color.b:F2}, {color.a:F2})";
-
-                case DebugViewMode.WorldPosition:
-                case DebugViewMode.LocalPosition:
-                    return $"RGB: ({color.r:F3}, {color.g:F3}, {color.b:F3}) [frac-encoded]";
-
-                default:
-                    return $"RGB: ({color.r:F3}, {color.g:F3}, {color.b:F3})";
-            }
+            // 相机目标已可能经过后处理与颜色映射，不能据此反解精确法线、UV 或深度。
+            string colorMap = parameters.ColorMapMode != 0 ? ", ColorMap" : "";
+            return $"Screen RGBA: ({color.r:F3}, {color.g:F3}, {color.b:F3}, {color.a:F3})\n[{mode}{colorMap}]";
         }
     }
 }

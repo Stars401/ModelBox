@@ -585,9 +585,13 @@ namespace ModelBox
 
         public static void DrawGPURenderingToggle(ModelBoxSelectionManager manager)
         {
+            EditorGUILayout.BeginHorizontal();
             EditorGUI.BeginChangeCheck();
-            bool gpuToggle = EditorGUILayout.Toggle(
-                new GUIContent("GPU 加速", "使用 GPU 批量绘制网格叠加，推荐用于高面数模型。"), manager.UseGPURendering);
+            bool gpuToggle = EditorGUILayout.ToggleLeft(
+                new GUIContent("GPU 加速", "使用 GPU 批量绘制网格叠加，推荐用于高面数模型。"),
+                manager.UseGPURendering, GUILayout.Width(100));
+            EditorGUILayout.LabelField("beta，如绘制异常请关闭", EditorStyles.miniLabel, GUILayout.MinWidth(0));
+            EditorGUILayout.EndHorizontal();
             if (EditorGUI.EndChangeCheck())
             {
                 manager.UseGPURendering = gpuToggle;

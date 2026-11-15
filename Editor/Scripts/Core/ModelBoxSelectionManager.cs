@@ -20,6 +20,7 @@ namespace ModelBox
         public MeshOverlayFlags OverlayFlags { get; private set; } = MeshOverlayFlags.None;
 
         private readonly Dictionary<Renderer, Material[]> _originalMaterials = new Dictionary<Renderer, Material[]>();
+        private readonly Dictionary<Renderer, Material[]> _textureChannelMaterials = new Dictionary<Renderer, Material[]>();
         private Material _textureChannelMat;
         private Material _checkerboardMat;
         private Material _uniformColorMat;
@@ -66,8 +67,8 @@ namespace ModelBox
         public float NormalWidth { get; set; } = 1f;
         public bool VertexScaleIndependent { get; set; } = true;
 
-        // 保留显式开启方式，两个 UI 入口共享此状态。
-        public bool UseGPURendering { get; set; } = false;
+        // 默认批量绘制，两个 UI 入口共享此状态并保留兼容回退。
+        public bool UseGPURendering { get; set; } = true;
 
         // 切线叠加
         public Color TangentColor { get; set; } = new Color(1f, 1f, 0.2f, 0.8f);
@@ -142,7 +143,6 @@ namespace ModelBox
 
         private void SubscribeEvents()
         {
-            SceneView.duringSceneGui += OnSceneGUI;
             EditorSceneManager.sceneSaving += OnSceneSaving;
             EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
             AssemblyReloadEvents.beforeAssemblyReload += Cleanup;
@@ -151,7 +151,6 @@ namespace ModelBox
 
         private void UnsubscribeEvents()
         {
-            SceneView.duringSceneGui -= OnSceneGUI;
             EditorSceneManager.sceneSaving -= OnSceneSaving;
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             AssemblyReloadEvents.beforeAssemblyReload -= Cleanup;
@@ -299,16 +298,25 @@ namespace ModelBox
         public void UpdateTextureChannelProperties()
         {
             if (_textureChannelMat == null) return;
-            _textureChannelMat.SetVector("_ChannelMask", GetChannelMaskVector());
-            _textureChannelMat.SetVector("_TexScale", new Vector4(TextureScale.x, TextureScale.y, 0, 0));
-            _textureChannelMat.SetVector("_TexOffset", new Vector4(TextureOffset.x, TextureOffset.y, 0, 0));
-            _textureChannelMat.SetInt("_UVChannel", UVChannel);
-            _textureChannelMat.SetInt("_WorldSpaceUV", WorldSpaceUV ? 1 : 0);
-            _textureChannelMat.SetFloat("_WorldUVScale", WorldUVScale);
-            _textureChannelMat.SetFloat("_ClampMin", ClampMin);
-            _textureChannelMat.SetFloat("_ClampMax", ClampMax);
-            _textureChannelMat.SetInt("_DisplayMode", MonoDisplay ? 1 : 0);
+            UpdateTextureChannelMaterial(_textureChannelMat);
+            foreach (var materials in _textureChannelMaterials.Values)
+                foreach (var material in materials)
+                    UpdateTextureChannelMaterial(material);
             EditorApplication.delayCall += () => SceneView.RepaintAll();
+        }
+
+        private void UpdateTextureChannelMaterial(Material material)
+        {
+            if (material == null) return;
+            material.SetVector("_ChannelMask", GetChannelMaskVector());
+            material.SetVector("_TexScale", new Vector4(TextureScale.x, TextureScale.y, 0, 0));
+            material.SetVector("_TexOffset", new Vector4(TextureOffset.x, TextureOffset.y, 0, 0));
+            material.SetInt("_UVChannel", UVChannel);
+            material.SetInt("_WorldSpaceUV", WorldSpaceUV ? 1 : 0);
+            material.SetFloat("_WorldUVScale", WorldUVScale);
+            material.SetFloat("_ClampMin", ClampMin);
+            material.SetFloat("_ClampMax", ClampMax);
+            material.SetInt("_DisplayMode", MonoDisplay ? 1 : 0);
         }
 
         /// <summary>
@@ -375,30 +383,7 @@ namespace ModelBox
                     case SelectionDebugMode.TextureChannel:
                         var texMat = GetOrCreateMaterial(ref _textureChannelMat, "Hidden/ModelBox/TextureChannel");
                         if (texMat != null)
-                        {
-                            // 优先使用用户自定义贴图，否则从材质读取
-                            if (CustomTexture != null)
-                            {
-                                texMat.SetTexture("_MainTex", CustomTexture);
-                            }
-                            else
-                            {
-                                // [fix] FindMaterialMainTexture：兼容自定义 shader（主贴图属性名非 _MainTex/_BaseMap）
-                                var srcTex = FindMaterialMainTexture(r.sharedMaterial);
-                                if (srcTex != null)
-                                    texMat.SetTexture("_MainTex", srcTex);
-                            }
-                            texMat.SetVector("_ChannelMask", GetChannelMaskVector());
-                            texMat.SetVector("_TexScale", new Vector4(TextureScale.x, TextureScale.y, 0, 0));
-                            texMat.SetVector("_TexOffset", new Vector4(TextureOffset.x, TextureOffset.y, 0, 0));
-                            texMat.SetInt("_UVChannel", UVChannel);
-                            texMat.SetInt("_WorldSpaceUV", WorldSpaceUV ? 1 : 0);
-                            texMat.SetFloat("_WorldUVScale", WorldUVScale);
-                            texMat.SetFloat("_ClampMin", ClampMin);
-                            texMat.SetFloat("_ClampMax", ClampMax);
-                            texMat.SetInt("_DisplayMode", MonoDisplay ? 1 : 0);
-                            ApplyAllSlots(r, texMat); // [M2-1 fix] 应用到所有材质槽
-                        }
+                            ApplyTextureChannelMaterials(r, texMat);
                         break;
 
                     case SelectionDebugMode.Checkerboard:
@@ -434,6 +419,21 @@ namespace ModelBox
             }
         }
 
+        private void ApplyTextureChannelMaterials(Renderer renderer, Material template)
+        {
+            var originals = _originalMaterials[renderer];
+            var materials = new Material[originals.Length];
+            for (int i = 0; i < materials.Length; i++)
+            {
+                var material = new Material(template) { hideFlags = HideFlags.HideAndDontSave };
+                material.SetTexture("_MainTex", CustomTexture != null ? CustomTexture : FindMaterialMainTexture(originals[i]));
+                UpdateTextureChannelMaterial(material);
+                materials[i] = material;
+            }
+            _textureChannelMaterials[renderer] = materials;
+            renderer.sharedMaterials = materials;
+        }
+
         public void RestoreOriginalMaterials()
         {
             foreach (var kvp in _originalMaterials)
@@ -442,6 +442,10 @@ namespace ModelBox
                     kvp.Key.sharedMaterials = kvp.Value;
             }
             _originalMaterials.Clear();
+            foreach (var materials in _textureChannelMaterials.Values)
+                foreach (var material in materials)
+                    if (material != null) Object.DestroyImmediate(material);
+            _textureChannelMaterials.Clear();
         }
 
         /// <summary>
@@ -481,13 +485,17 @@ namespace ModelBox
         public IReadOnlyCollection<Renderer> OverriddenRenderers => _originalMaterials.Keys;
 
         /// <summary>
-        /// [feat] 贴图通道模式：获取采样源贴图（自定义贴图优先，否则该 Renderer 原始材质的主贴图）。
-        /// 与 ApplyDebugMaterial 中的贴图读取逻辑保持一致。
+        /// 获取指定调试材质槽实际使用的贴图，未覆盖时解析原始材质槽。
         /// </summary>
-        public Texture GetTextureChannelSource(Renderer renderer)
+        public Texture GetTextureChannelSource(Renderer renderer, int slotIndex = 0)
         {
+            if (renderer != null && _textureChannelMaterials.TryGetValue(renderer, out var debugMaterials)
+                && slotIndex >= 0 && slotIndex < debugMaterials.Length && debugMaterials[slotIndex] != null)
+                return debugMaterials[slotIndex].GetTexture("_MainTex");
             if (CustomTexture != null) return CustomTexture;
-            return FindMaterialMainTexture(GetOriginalMaterial(renderer));
+            var materials = GetOriginalMaterials(renderer);
+            if (materials == null || slotIndex < 0 || slotIndex >= materials.Length) return null;
+            return FindMaterialMainTexture(materials[slotIndex]);
         }
 
         /// <summary>
@@ -551,7 +559,7 @@ namespace ModelBox
             }
         }
 
-        private void OnSceneGUI(SceneView sceneView)
+        internal void OnSceneGUI(SceneView sceneView)
         {
             bool hasBoneWeight = BoneWeightMode != BoneWeightDisplayMode.Off && BoneVertexWeights != null;
             bool hasBoneGizmos = ShowBoneGizmos && BoneWeightTargetSMR != null;
@@ -560,12 +568,9 @@ namespace ModelBox
             var selected = Selection.activeTransform;
             if (selected == null) return;
 
-            // 网格准备只服务于绘制；骨骼拾取仍需处理 MouseDown 等事件。
+            // 输入在所有 GUI 绘制完成后统一处理。
             if (Event.current == null || Event.current.type != EventType.Repaint)
-            {
-                if (hasBoneGizmos && Event.current != null) DrawBoneGizmos(sceneView);
                 return;
-            }
 
             var camera = sceneView.camera;
 
@@ -907,54 +912,56 @@ namespace ModelBox
             Handles.zTest = CompareFunction.LessEqual;
         }
 
+        internal void HandleSceneInput(SceneView sceneView)
+        {
+            var ev = Event.current;
+            if (!ShowBoneGizmos || Selection.activeTransform == null || GUIUtility.hotControl != 0
+                || ev == null || ev.type != EventType.MouseDown || ev.button != 0 || ev.alt)
+                return;
+
+            var smr = BoneWeightTargetSMR;
+            if (smr == null) return;
+            var bones = smr.bones;
+            if (bones == null || bones.Length == 0) return;
+            var camera = sceneView.camera;
+            if (camera == null) return;
+
+            float bestScreenDist = 20f;
+            int bestBone = -1;
+            for (int i = 0; i < bones.Length; i++)
+            {
+                if (bones[i] == null) continue;
+                Vector3 bonePos = bones[i].position;
+                if (camera.WorldToScreenPoint(bonePos).z < 0) continue;
+                float distance = Vector2.Distance(HandleUtility.WorldToGUIPoint(bonePos), ev.mousePosition);
+                if (distance < bestScreenDist)
+                {
+                    bestScreenDist = distance;
+                    bestBone = i;
+                }
+            }
+
+            if (bestBone >= 0)
+            {
+                SelectedBoneIndex = bestBone;
+                OnBoneSelectedInScene?.Invoke(bestBone);
+                ev.Use();
+                EditorApplication.delayCall += () => SceneView.RepaintAll();
+            }
+        }
+
         // [feat] 骨骼 gizmo 渲染：骨骼位置标记 + 父子连线 + 选中骨骼高亮 + 坐标轴
         private void DrawBoneGizmos(SceneView sceneView)
         {
             var smr = BoneWeightTargetSMR;
             if (smr == null) return;
-
             var bones = smr.bones;
             if (bones == null || bones.Length == 0) return;
 
-            // [perf] 复用 HashSet 避免每帧分配
             if (_boneSet == null) _boneSet = new HashSet<Transform>();
             else _boneSet.Clear();
-            foreach (var b in bones)
-                if (b != null) _boneSet.Add(b);
-
-            // [feat] SceneView 点击选骨骼：鼠标点击时找最近的骨骼
-            var ev = Event.current;
-            if (ev != null && ev.type == EventType.MouseDown && ev.button == 0 && !ev.alt)
-            {
-                float bestScreenDist = 20f; // 屏幕空间阈值（像素）
-                int bestBone = -1;
-                var camera = sceneView.camera;
-
-                for (int i = 0; i < bones.Length; i++)
-                {
-                    if (bones[i] == null) continue;
-                    Vector3 bonePos = bones[i].position;
-                    Vector3 screenPos = camera.WorldToScreenPoint(bonePos);
-                    if (screenPos.z < 0) continue; // 在相机后面
-                    // 转换为 GUI 坐标空间距离
-                    Vector2 guiPos = HandleUtility.WorldToGUIPoint(bonePos);
-                    float dist = Vector2.Distance(guiPos, ev.mousePosition);
-                    if (dist < bestScreenDist)
-                    {
-                        bestScreenDist = dist;
-                        bestBone = i;
-                    }
-                }
-
-                if (bestBone >= 0)
-                {
-                    SelectedBoneIndex = bestBone;
-                    // 同步到 BonePanel（通过静态回调）
-                    OnBoneSelectedInScene?.Invoke(bestBone);
-                    ev.Use();
-                    EditorApplication.delayCall += () => SceneView.RepaintAll();
-                }
-            }
+            foreach (var bone in bones)
+                if (bone != null) _boneSet.Add(bone);
 
             // 保存 Handles 状态
             var prevColor = Handles.color;

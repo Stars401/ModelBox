@@ -191,6 +191,63 @@ namespace ModelBox.Tests
             Assert.IsFalse(after.Keywords.Exists(keyword => keyword.Name == "_NORMALMAP" && keyword.IsEnabled), "Undo must be reflected without reselecting the material.");
         }
 
+        [Test]
+        public void TextureChannel_PerRendererAndSlotSourcesSurviveRefreshAndParameterUpdates()
+        {
+            var manager = ModelBoxSelectionManager.Instance;
+            var savedTexture = manager.CustomTexture;
+            var savedScale = manager.TextureScale;
+            var savedOffset = manager.TextureOffset;
+            int savedChannel = manager.ChannelMask;
+            bool savedMono = manager.MonoDisplay;
+            var child = new GameObject("SecondRenderer", typeof(MeshRenderer));
+            child.transform.SetParent(_target.transform);
+            var renderer = _target.GetComponent<Renderer>();
+            var secondRenderer = child.GetComponent<Renderer>();
+            _original.shader = RequireShader("Hidden/ModelBox/TextureChannel");
+            _secondOriginal.shader = _original.shader;
+            _original.SetTexture("_MainTex", Texture2D.whiteTexture);
+            _secondOriginal.SetTexture("_MainTex", Texture2D.blackTexture);
+            secondRenderer.sharedMaterial = _secondOriginal;
+            try
+            {
+                manager.CustomTexture = null;
+                manager.SetMode(SelectionDebugMode.TextureChannel);
+                Assert.AreSame(Texture2D.whiteTexture, renderer.sharedMaterials[0].GetTexture("_MainTex"));
+                Assert.AreSame(Texture2D.blackTexture, renderer.sharedMaterials[1].GetTexture("_MainTex"));
+                Assert.AreSame(Texture2D.blackTexture, secondRenderer.sharedMaterial.GetTexture("_MainTex"));
+
+                manager.RefreshDebugMaterial();
+                Assert.AreSame(Texture2D.whiteTexture, renderer.sharedMaterials[0].GetTexture("_MainTex"));
+                Assert.AreSame(Texture2D.blackTexture, renderer.sharedMaterials[1].GetTexture("_MainTex"));
+                Assert.AreSame(Texture2D.blackTexture, secondRenderer.sharedMaterial.GetTexture("_MainTex"));
+                manager.TextureScale = new Vector2(2f, 3f);
+                manager.TextureOffset = new Vector2(0.25f, 0.5f);
+                manager.ChannelMask = 4;
+                manager.MonoDisplay = true;
+                manager.UpdateTextureChannelProperties();
+                foreach (var debugMaterial in new[] { renderer.sharedMaterials[0], renderer.sharedMaterials[1], secondRenderer.sharedMaterial })
+                {
+                    Assert.AreEqual(new Vector4(2f, 3f, 0f, 0f), debugMaterial.GetVector("_TexScale"));
+                    Assert.AreEqual(new Vector4(0.25f, 0.5f, 0f, 0f), debugMaterial.GetVector("_TexOffset"));
+                    Assert.AreEqual(new Vector4(0f, 0f, 0f, 1f), debugMaterial.GetVector("_ChannelMask"));
+                    Assert.AreEqual(1, debugMaterial.GetInt("_DisplayMode"));
+                }
+                manager.SetMode(SelectionDebugMode.None);
+                CollectionAssert.AreEqual(new[] { _original, _secondOriginal }, renderer.sharedMaterials);
+                Assert.AreSame(_secondOriginal, secondRenderer.sharedMaterial);
+            }
+            finally
+            {
+                manager.SetMode(SelectionDebugMode.None);
+                manager.CustomTexture = savedTexture;
+                manager.TextureScale = savedScale;
+                manager.TextureOffset = savedOffset;
+                manager.ChannelMask = savedChannel;
+                manager.MonoDisplay = savedMono;
+            }
+        }
+
         private void BeginIsolatedUndoGroup()
         {
             // Give a missing production Undo record a harmless test-owned operation to undo.

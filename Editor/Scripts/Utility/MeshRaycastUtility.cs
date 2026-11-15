@@ -18,7 +18,9 @@ namespace ModelBox
         public struct MeshRayHit
         {
             public Vector3 point;        // 世界坐标命中点
-            public Vector3 normal;       // 世界空间法线
+            public Vector3 normal;       // 世界空间平滑法线
+            public Vector3 localNormal;  // Renderer 本地空间平滑法线
+            public Vector3 flatNormal;   // 世界空间几何面法线（按三角形绕序）
             public Vector2 textureCoord; // UV0
             public float distance;       // 射线起点到命中点的距离
             public int triangleIndex;    // 命中的三角形索引（子网格内）
@@ -95,24 +97,29 @@ namespace ModelBox
             hit.point = localToWorld.MultiplyPoint3x4(localHitPoint);
             hit.distance = Vector3.Distance(worldRay.origin, hit.point);
 
-            // 法线计算：有顶点法线时双线性插值（平滑着色），否则用面法线
+            // 法线计算：与 shader 保持相同的逐顶点变换、归一化、重心插值顺序。
             int[] hitTris = mesh.GetTriangles(hitSubMesh);
             int i0 = hitTris[hitTriIdx * 3];
             int i1 = hitTris[hitTriIdx * 3 + 1];
             int i2 = hitTris[hitTriIdx * 3 + 2];
+            Vector3 e1 = vertices[i1] - vertices[i0];
+            Vector3 e2 = vertices[i2] - vertices[i0];
+            Matrix4x4 normalMatrix = worldToLocal.transpose;
+            hit.flatNormal = Vector3.Cross(localToWorld.MultiplyVector(e1), localToWorld.MultiplyVector(e2)).normalized;
 
             if (hasNormals)
             {
                 float w0 = 1f - hitU - hitV;
-                Vector3 localNormal = (normals[i0] * w0 + normals[i1] * hitU + normals[i2] * hitV).normalized;
-                hit.normal = localToWorld.MultiplyVector(localNormal).normalized;
+                hit.localNormal = (normals[i0] * w0 + normals[i1] * hitU + normals[i2] * hitV).normalized;
+                Vector3 n0 = normalMatrix.MultiplyVector(normals[i0]).normalized;
+                Vector3 n1 = normalMatrix.MultiplyVector(normals[i1]).normalized;
+                Vector3 n2 = normalMatrix.MultiplyVector(normals[i2]).normalized;
+                hit.normal = (n0 * w0 + n1 * hitU + n2 * hitV).normalized;
             }
             else
             {
-                Vector3 e1 = vertices[i1] - vertices[i0];
-                Vector3 e2 = vertices[i2] - vertices[i0];
-                Vector3 localFaceNormal = Vector3.Cross(e1, e2).normalized;
-                hit.normal = localToWorld.MultiplyVector(localFaceNormal).normalized;
+                hit.localNormal = Vector3.Cross(e1, e2).normalized;
+                hit.normal = normalMatrix.MultiplyVector(hit.localNormal).normalized;
             }
 
             // UV 插值
@@ -135,13 +142,13 @@ namespace ModelBox
         /// </summary>
         public static List<Renderer> PickNearestRenderers(Ray worldRay, Camera camera)
         {
-            float maxDist = camera != null ? camera.farClipPlane : 5000f;
+            float maxDist = GetMaxRayDistance(worldRay, camera);
             var results = new List<(Renderer rend, float dist)>();
 
             foreach (var mr in UnityEngine.Object.FindObjectsByType<MeshRenderer>(
                          FindObjectsSortMode.None))
             {
-                if (!mr.enabled || mr.gameObject.hideFlags != HideFlags.None) continue;
+                if (!CanPickRenderer(mr, camera)) continue;
                 if (!RayIntersectsBounds(worldRay, mr.bounds, out float dist)) continue;
                 if (dist > maxDist) continue;
                 results.Add((mr, dist));
@@ -150,7 +157,7 @@ namespace ModelBox
             foreach (var smr in UnityEngine.Object.FindObjectsByType<SkinnedMeshRenderer>(
                          FindObjectsSortMode.None))
             {
-                if (!smr.enabled || smr.gameObject.hideFlags != HideFlags.None) continue;
+                if (!CanPickRenderer(smr, camera)) continue;
                 if (!RayIntersectsBounds(worldRay, smr.bounds, out float dist)) continue;
                 if (dist > maxDist) continue;
                 results.Add((smr, dist));
@@ -167,7 +174,7 @@ namespace ModelBox
         /// </summary>
         public static Renderer PickNearestRenderer(Ray worldRay, Camera camera)
         {
-            float maxDist = camera != null ? camera.farClipPlane : 5000f;
+            float maxDist = GetMaxRayDistance(worldRay, camera);
             Renderer nearest = null;
             float nearestDist = float.MaxValue;
 
@@ -176,7 +183,7 @@ namespace ModelBox
             foreach (var mr in UnityEngine.Object.FindObjectsByType<MeshRenderer>(
                          FindObjectsSortMode.None))
             {
-                if (!mr.enabled || mr.gameObject.hideFlags != HideFlags.None) continue;
+                if (!CanPickRenderer(mr, camera)) continue;
                 if (!RayIntersectsBounds(worldRay, mr.bounds, out float dist)) continue;
                 if (dist >= nearestDist || dist > maxDist) continue;
                 nearestDist = dist;
@@ -186,7 +193,7 @@ namespace ModelBox
             foreach (var smr in UnityEngine.Object.FindObjectsByType<SkinnedMeshRenderer>(
                          FindObjectsSortMode.None))
             {
-                if (!smr.enabled || smr.gameObject.hideFlags != HideFlags.None) continue;
+                if (!CanPickRenderer(smr, camera)) continue;
                 if (!RayIntersectsBounds(worldRay, smr.bounds, out float dist)) continue;
                 if (dist >= nearestDist || dist > maxDist) continue;
                 nearestDist = dist;
@@ -194,6 +201,22 @@ namespace ModelBox
             }
 
             return nearest;
+        }
+
+        private static float GetMaxRayDistance(Ray ray, Camera camera)
+        {
+            if (camera == null) return 5000f;
+            float depthRate = Vector3.Dot(ray.direction, camera.transform.forward);
+            if (depthRate <= Epsilon) return float.PositiveInfinity;
+            float originDepth = Vector3.Dot(ray.origin - camera.transform.position, camera.transform.forward);
+            return Mathf.Max(0f, (camera.farClipPlane - originDepth) / depthRate);
+        }
+
+        private static bool CanPickRenderer(Renderer renderer, Camera camera)
+        {
+            return renderer != null && renderer.enabled && renderer.gameObject.activeInHierarchy
+                && renderer.gameObject.hideFlags == HideFlags.None
+                && (camera == null || (camera.cullingMask & (1 << renderer.gameObject.layer)) != 0);
         }
 
         /// <summary>
@@ -254,13 +277,14 @@ namespace ModelBox
 
             if (renderer is SkinnedMeshRenderer smr)
             {
+                if (smr.sharedMesh == null) return null;
                 if (_skinnedBakeMesh == null)
                 {
                     _skinnedBakeMesh = new Mesh();
                     _skinnedBakeMesh.name = "_ModelBox_BakeMesh";
                     _skinnedBakeMesh.hideFlags = HideFlags.HideAndDontSave;
                 }
-                smr.BakeMesh(_skinnedBakeMesh);
+                smr.BakeMesh(_skinnedBakeMesh, true);
                 return _skinnedBakeMesh;
             }
 
