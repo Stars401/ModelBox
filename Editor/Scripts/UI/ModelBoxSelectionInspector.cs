@@ -12,6 +12,8 @@ namespace ModelBox
     public class ModelBoxSelectionInspector
     {
         private int _selectedTab;
+        private int _lastSyncedTab = -1;
+        private SelectionDebugMode _lastSyncedMode;
         private readonly string[] _tabNames = { "贴图通道", "UV 棋盘格", "Shader 属性", "顶点颜色", "网格叠加" };
 
         // [perf P4] 缓存字符串数组，避免每帧分配
@@ -69,6 +71,7 @@ namespace ModelBox
             _vertexColorActive = (manager.CurrentMode == SelectionDebugMode.VertexColor);
 
             _selectedTab = GUILayout.Toolbar(_selectedTab, _tabNames);
+            SynchronizeParameters(manager);
 
             // R6: 子标签页导航与内容分隔线
             var subNavSepRect = EditorGUILayout.GetControlRect(false, 1);
@@ -98,6 +101,35 @@ namespace ModelBox
                 manager.SetMode(SelectionDebugMode.None);
             }
             ModelBoxStyles.EndNeutralButton();
+        }
+
+        private void SynchronizeParameters(ModelBoxSelectionManager manager)
+        {
+            bool refreshAll = _lastSyncedTab != _selectedTab || _lastSyncedMode != manager.CurrentMode;
+            _lastSyncedTab = _selectedTab;
+            _lastSyncedMode = manager.CurrentMode;
+
+            // 激活模式始终读取共享状态；未激活的面板保留待应用编辑。
+            if (refreshAll || _textureChannelActive)
+            {
+                _channelMask = manager.ChannelMask;
+                _customTexture = manager.CustomTexture;
+                _uvChannel = manager.UVChannel;
+                _texScale = manager.TextureScale;
+                _texOffset = manager.TextureOffset;
+                _worldUVScale = manager.WorldUVScale;
+                _clampMin = manager.ClampMin;
+                _clampMax = manager.ClampMax;
+                _monoDisplay = manager.MonoDisplay;
+            }
+            if (refreshAll || _checkerboardActive)
+            {
+                _gridSize = manager.CheckerGridSize;
+                _colorA = manager.CheckerColorA;
+                _colorB = manager.CheckerColorB;
+            }
+            if (refreshAll || _vertexColorActive)
+                _vcChannel = manager.VertexColorChannel;
         }
 
         private void DrawTextureChannel(ModelBoxSelectionManager manager)
@@ -160,6 +192,8 @@ namespace ModelBox
 
             if (!_textureChannelActive)
             {
+                _channelMask = newChannelMask;
+                _monoDisplay = newMono;
                 if (GUILayout.Button("应用通道隔离", GUILayout.Height(28)))
                 {
                     _textureChannelActive = true;
@@ -459,6 +493,7 @@ namespace ModelBox
 
             if (!_vertexColorActive)
             {
+                _vcChannel = newChannel;
                 if (GUILayout.Button("应用顶点颜色", GUILayout.Height(28)))
                 {
                     _vertexColorActive = true;

@@ -114,7 +114,6 @@ namespace ModelBox
             var settings = ModelBoxSettings.GetOrCreate();
             if (settings != null)
             {
-                ModelBoxSettings._pendingModelBoxUndo++; // [fix C1] 代际计数器
                 Undo.RecordObject(settings, "modelBox Mode");
             }
 
@@ -131,42 +130,7 @@ namespace ModelBox
                 OnParametersChanged?.Invoke(CurrentParameters);
             }
 
-            // Wireframe 模式自动启用选区线框叠加；切换到其他模式时自动清理
-            // [fix H8] 进入时保存之前的 OverlayFlags，离开时恢复
-            var selManager = ModelBoxSelectionManager.Instance;
-            if (selManager != null)
-            {
-                if (mode == DebugViewMode.Wireframe)
-                {
-                    // 保存当前 flags（仅首次进入时保存，防止模式内重复切换覆盖原始值）
-                    if (!_hasSavedOverlayFlags)
-                    {
-                        _overlayFlagsBeforeWireframe = selManager.OverlayFlags;
-                        _hasSavedOverlayFlags = true;
-                    }
-                    selManager.SetOverlayFlags(selManager.OverlayFlags | MeshOverlayFlags.Wireframe);
-                }
-                else
-                {
-                    // 离开 Wireframe 模式：恢复之前的 flags（仅清除自动添加的 Wireframe 位）
-                    if (_hasSavedOverlayFlags)
-                    {
-                        // [fix v0.6.x] 保留用户在 Wireframe 模式期间手动开启的其他叠加位 —
-                        // 旧逻辑整体回滚到进入前快照，会把用户刚开的顶点/法线等叠加静默丢弃；
-                        // 仅当 Wireframe 位是本次自动添加（进入前未开启）时才移除它
-                        var current = selManager.OverlayFlags;
-                        var restored = (_overlayFlagsBeforeWireframe & MeshOverlayFlags.Wireframe) != 0
-                            ? current
-                            : current & ~MeshOverlayFlags.Wireframe;
-                        selManager.SetOverlayFlags(restored);
-                        _hasSavedOverlayFlags = false;
-                    }
-                    else
-                    {
-                        selManager.SetOverlayFlags(selManager.OverlayFlags & ~MeshOverlayFlags.Wireframe);
-                    }
-                }
-            }
+            UpdateWireframeOverlay(mode);
 
             // OpaqueTexture 模式需要 _CameraOpaqueTexture，自动启用 URP Opaque Texture
             if (mode == DebugViewMode.OpaqueTexture)
@@ -192,13 +156,43 @@ namespace ModelBox
         /// </summary>
         internal void SetDebugModeFromUndo(DebugViewMode mode, ModelBoxParameters parameters)
         {
+            bool modeChanged = CurrentMode != mode;
             CurrentMode = mode;
             IsEnabled = (mode != DebugViewMode.None);
             CurrentParameters = parameters;
+            if (modeChanged)
+                UpdateWireframeOverlay(mode);
             _renderer?.SetDebugMode(mode, parameters);
-            OnModeChanged?.Invoke(mode);
+            if (modeChanged)
+                OnModeChanged?.Invoke(mode);
             OnParametersChanged?.Invoke(parameters);
             EditorApplication.delayCall += () => SceneView.RepaintAll();
+        }
+
+        private void UpdateWireframeOverlay(DebugViewMode mode)
+        {
+            var selManager = ModelBoxSelectionManager.Instance;
+            if (selManager == null) return;
+
+            if (mode == DebugViewMode.Wireframe)
+            {
+                if (!_hasSavedOverlayFlags)
+                {
+                    _overlayFlagsBeforeWireframe = selManager.OverlayFlags;
+                    _hasSavedOverlayFlags = true;
+                }
+                selManager.SetOverlayFlags(selManager.OverlayFlags | MeshOverlayFlags.Wireframe);
+            }
+            else if (_hasSavedOverlayFlags)
+            {
+                // 只移除本次模式自动添加的线框位，保留用户手动开启的其他叠加。
+                var current = selManager.OverlayFlags;
+                var restored = (_overlayFlagsBeforeWireframe & MeshOverlayFlags.Wireframe) != 0
+                    ? current
+                    : current & ~MeshOverlayFlags.Wireframe;
+                selManager.SetOverlayFlags(restored);
+                _hasSavedOverlayFlags = false;
+            }
         }
 
         /// <summary>
@@ -210,7 +204,6 @@ namespace ModelBox
             var settings = ModelBoxSettings.GetOrCreate();
             if (settings != null)
             {
-                ModelBoxSettings._pendingModelBoxUndo++; // [fix C1] 代际计数器
                 Undo.RecordObject(settings, "modelBox Parameters");
             }
 

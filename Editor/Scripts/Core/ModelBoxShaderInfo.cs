@@ -1,6 +1,4 @@
 using System.Collections.Generic;
-using System.IO;
-using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -74,7 +72,7 @@ namespace ModelBox
             }
 
             // --- Passes ---
-            var passNames = ParsePassNames(shader);
+            var passNames = GetPassNames(material);
             for (int i = 0; i < passNames.Count; i++)
             {
                 var passName = passNames[i];
@@ -116,25 +114,14 @@ namespace ModelBox
         public void ApplyKeywordChange(Material material, string keywordName, bool enable)
         {
             if (material == null) return;
+            Undo.RecordObject(material, "Shader Keyword Change");
             if (enable)
                 material.EnableKeyword(keywordName);
             else
                 material.DisableKeyword(keywordName);
 
-            // 更新内部状态
-            for (int i = 0; i < Keywords.Count; i++)
-            {
-                var kw = Keywords[i];
-                if (kw.Name == keywordName)
-                {
-                    kw.IsEnabled = enable;
-                    Keywords[i] = kw;
-                    break;
-                }
-            }
-            EnabledKeywordCount = 0;
-            foreach (var kw in Keywords)
-                if (kw.IsEnabled) EnabledKeywordCount++;
+            EditorUtility.SetDirty(material);
+            RefreshMaterialState(material);
         }
 
         /// <summary>
@@ -143,80 +130,46 @@ namespace ModelBox
         public void ApplyPassChange(Material material, string passName, bool enabled)
         {
             if (material == null) return;
+            Undo.RecordObject(material, "Shader Pass Change");
             material.SetShaderPassEnabled(passName, enabled);
+            EditorUtility.SetDirty(material);
+            RefreshMaterialState(material);
+        }
 
+        /// <summary>同步可能由 Inspector 或 Undo 修改的材质状态，保留 Shader 结构缓存。</summary>
+        public void RefreshMaterialState(Material material)
+        {
+            if (material == null) return;
+            EnabledKeywordCount = 0;
+            for (int i = 0; i < Keywords.Count; i++)
+            {
+                var kw = Keywords[i];
+                kw.IsEnabled = material.IsKeywordEnabled(kw.Name);
+                Keywords[i] = kw;
+                if (kw.IsEnabled) EnabledKeywordCount++;
+            }
+
+            EnabledPassCount = 0;
             for (int i = 0; i < Passes.Count; i++)
             {
                 var p = Passes[i];
-                if (p.Name == passName)
-                {
-                    p.IsEnabled = enabled;
-                    Passes[i] = p;
-                    break;
-                }
-            }
-            EnabledPassCount = 0;
-            foreach (var p in Passes)
+                p.IsEnabled = material.GetShaderPassEnabled(p.Name);
+                Passes[i] = p;
                 if (p.IsEnabled) EnabledPassCount++;
+            }
         }
 
         /// <summary>
-        /// 从 shader 文件文本中解析 pass 名称。
+        /// 从已编译材质读取实际 Pass 名称，不受 ShaderLab 排版影响。
         /// </summary>
-        private static List<string> ParsePassNames(Shader shader)
+        private static List<string> GetPassNames(Material material)
         {
             var names = new List<string>();
-            var path = AssetDatabase.GetAssetPath(shader);
-            if (!string.IsNullOrEmpty(path) && File.Exists(path))
+            for (int i = 0; i < material.passCount; i++)
             {
-                var text = File.ReadAllText(path);
-                // 匹配 Pass { ... Name "xxx" ... } 中的 Name
-                // 简化：直接匹配所有 Name "xxx"（跳过注释行）
-                var lines = text.Split('\n');
-                bool inPass = false;
-                int braceDepth = 0;
-                foreach (var rawLine in lines)
-                {
-                    var line = rawLine.Trim();
-
-                    // 跳过注释和 UsePass 指令
-                    if (line.StartsWith("//") || line.StartsWith("UsePass"))
-                        continue;
-
-                    if (!line.Contains("UsePass") && line.Contains("Pass") && (line.Contains("{") || line.EndsWith("{")))
-                    {
-                        inPass = true;
-                        braceDepth = 0;
-                    }
-
-                    if (inPass)
-                    {
-                        foreach (char c in line)
-                        {
-                            if (c == '{') braceDepth++;
-                            if (c == '}') braceDepth--;
-                        }
-
-                        var match = Regex.Match(line, @"Name\s+""([^""]+)""");
-                        if (match.Success)
-                        {
-                            var name = match.Groups[1].Value;
-                            if (!names.Contains(name))
-                                names.Add(name);
-                        }
-
-                        if (braceDepth <= 0)
-                            inPass = false;
-                    }
-                }
-            }
-
-            // Fallback：使用索引命名
-            if (names.Count == 0)
-            {
-                int passCount = shader.passCount;
-                for (int i = 0; i < passCount; i++)
-                    names.Add($"pass_{i}");
+                var name = material.GetPassName(i);
+                if (!string.IsNullOrEmpty(name) && !names.Contains(name))
+                    names.Add(name);
             }
 
             return names;

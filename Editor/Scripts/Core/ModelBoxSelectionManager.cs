@@ -456,6 +456,15 @@ namespace ModelBox
             return renderer.sharedMaterial;
         }
 
+        /// <summary>获取调试覆盖前的全部材质槽，返回副本以保护恢复快照。</summary>
+        public Material[] GetOriginalMaterials(Renderer renderer)
+        {
+            if (renderer == null) return null;
+            if (_originalMaterials.TryGetValue(renderer, out var mats))
+                return (Material[])mats.Clone();
+            return renderer.sharedMaterials;
+        }
+
         /// <summary>
         /// [feat] 指定 Renderer 当前是否被选区调试材质覆盖（PixelBar 据此采样调试数据而非法线值）。
         /// </summary>
@@ -649,8 +658,7 @@ namespace ModelBox
             CachedMeshData data;
 
             // [fix] 骨骼权重可视化也需要烘焙蒙皮网格，确保顶点位置匹配当前动画姿态
-            bool hasBoneWeight = BoneWeightMode != BoneWeightDisplayMode.Off && BoneVertexWeights != null
-                && BoneWeightTargetSMR != null && renderer is SkinnedMeshRenderer smrCheck && smrCheck == BoneWeightTargetSMR;
+            bool hasBoneWeight = HasBoneWeight(renderer);
 
             // 蒙皮网格烘焙：有显式叠加标志 或 骨骼权重可视化激活时执行
             bool needsSkinnedPose = isSkinned && smr != null
@@ -679,7 +687,15 @@ namespace ModelBox
                     if (UseGPURendering)
                         DrawMeshOverlayGPU(renderer, data, camera);
                     else
+                    {
                         DrawMeshOverlayLegacy(renderer, data);
+                        if (hasBoneWeight)
+                        {
+                            var settings = ModelBoxSettings.GetOrCreate();
+                            DrawBoneWeightOverlay(data, renderer.transform.localToWorldMatrix, camera,
+                                renderer.bounds, settings != null && settings.OverlayDepthTest);
+                        }
+                    }
                 }
                 finally
                 {
@@ -716,35 +732,13 @@ namespace ModelBox
                 }
             }
 
-            // [feat] 顶点覆盖：显式开启 或 骨骼权重模式激活时自动启用
-            bool hasBoneWeight = BoneWeightMode != BoneWeightDisplayMode.Off && BoneVertexWeights != null;
-            bool showVertices = (OverlayFlags & MeshOverlayFlags.Vertices) != 0 || hasBoneWeight;
-            if (showVertices)
+            if (HasBoneWeight(renderer))
             {
-                // [fix] 骨骼权重仅作用于目标 SMR（多 SMR 模型下避免跨 Mesh 权重不匹配）
-                bool isTargetSMR = hasBoneWeight && BoneWeightTargetSMR != null
-                    && renderer is SkinnedMeshRenderer smrCheck && smrCheck == BoneWeightTargetSMR;
-
-                if (isTargetSMR)
-                {
-                    // [fix] ColorMap 模式：Maya-style 表面渲染；Threshold 模式：顶点球体
-                    if (BoneWeightMode == BoneWeightDisplayMode.ColorMap)
-                    {
-                        ModelBoxOverlayRenderer.DrawBoneWeightSurface(
-                            data, matrix, BoneVertexWeights, camera, bounds, depthTest, BoneWeightOpacity);
-                    }
-                    else
-                    {
-                        ModelBoxOverlayRenderer.DrawVerticesWeighted(
-                            data, matrix, BoneVertexWeights,
-                            BoneWeightMode, BoneWeightThreshold,
-                            VertexSize, VertexScaleIndependent, camera, bounds, depthTest);
-                    }
-                }
-                else
-                {
-                    ModelBoxOverlayRenderer.DrawVertices(data, matrix, VertexColor, VertexSize, VertexScaleIndependent, camera, bounds, depthTest);
-                }
+                DrawBoneWeightOverlay(data, matrix, camera, bounds, depthTest);
+            }
+            else if ((OverlayFlags & MeshOverlayFlags.Vertices) != 0)
+            {
+                ModelBoxOverlayRenderer.DrawVertices(data, matrix, VertexColor, VertexSize, VertexScaleIndependent, camera, bounds, depthTest);
             }
 
             if ((OverlayFlags & MeshOverlayFlags.Normals) != 0)
@@ -786,6 +780,28 @@ namespace ModelBox
             Handles.zTest = CompareFunction.LessEqual;
         }
 
+        private bool HasBoneWeight(Renderer renderer)
+        {
+            return BoneWeightMode != BoneWeightDisplayMode.Off && BoneVertexWeights != null
+                && BoneWeightTargetSMR != null && renderer == BoneWeightTargetSMR;
+        }
+
+        private void DrawBoneWeightOverlay(CachedMeshData data, Matrix4x4 matrix, Camera camera,
+            Bounds bounds, bool depthTest)
+        {
+            if (BoneWeightMode == BoneWeightDisplayMode.ColorMap)
+            {
+                ModelBoxOverlayRenderer.DrawBoneWeightSurface(
+                    data, matrix, BoneVertexWeights, camera, bounds, depthTest, BoneWeightOpacity);
+            }
+            else
+            {
+                ModelBoxOverlayRenderer.DrawVerticesWeighted(
+                    data, matrix, BoneVertexWeights, BoneWeightMode, BoneWeightThreshold,
+                    VertexSize, VertexScaleIndependent, camera, bounds, depthTest);
+            }
+        }
+
         /// <summary>
         /// Legacy 回退路径：逐基元 Handles 调用。低面数物体下视觉效果更好（原生 AA）。
         /// </summary>
@@ -819,7 +835,7 @@ namespace ModelBox
                 }
             }
 
-            if ((OverlayFlags & MeshOverlayFlags.Vertices) != 0)
+            if ((OverlayFlags & MeshOverlayFlags.Vertices) != 0 && !HasBoneWeight(renderer))
             {
                 // [fix v0.4.1] 防御性 null 检查
                 if (data.Vertices == null) goto skipVertices;

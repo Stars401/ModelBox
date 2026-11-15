@@ -68,6 +68,8 @@ namespace ModelBox
                 _lastMaterial = material;
             }
 
+            _cachedData?.RefreshMaterialState(material);
+
             // ---- Shader 信息头部（独立 try-catch，不阻断后续 UI） ----
             try
             {

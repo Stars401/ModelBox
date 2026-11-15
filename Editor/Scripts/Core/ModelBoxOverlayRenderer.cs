@@ -595,6 +595,8 @@ namespace ModelBox
         private static int _boneWeightTempMeshHash;
         // [perf] 跟踪权重数组引用，仅在骨骼选择变化时重建顶点颜色
         private static float[] _lastSurfaceWeights;
+        private static CachedMeshData _lastSurfaceData;
+        private static int _lastSurfacePoseVersion;
 
         /// <summary>
         /// Maya-style 骨骼权重表面渲染：将权重映射为顶点颜色，渲染整个网格表面。
@@ -632,6 +634,15 @@ namespace ModelBox
                 _boneWeightTempMeshHash = hash;
                 meshRebuilt = true;
             }
+
+            if (!meshRebuilt && (!ReferenceEquals(_lastSurfaceData, data)
+                || _lastSurfacePoseVersion != data.PoseVersion))
+            {
+                _boneWeightTempMesh.SetVertices(data.Vertices);
+                _boneWeightTempMesh.RecalculateBounds();
+            }
+            _lastSurfaceData = data;
+            _lastSurfacePoseVersion = data.PoseVersion;
 
             // [perf] 仅在权重数组变化或 Mesh 重建时更新顶点颜色（避免每帧上传）
             if (meshRebuilt || !ReferenceEquals(_lastSurfaceWeights, vertexWeights))
@@ -946,6 +957,8 @@ namespace ModelBox
             _overlayLineZTest = -1;
             _boneWeightTempMeshHash = 0;
             _lastSurfaceWeights = null;
+            _lastSurfaceData = null;
+            _lastSurfacePoseVersion = 0;
             _instanceMatrices = null;
             _batchMatrices = null;
             _sharedMPB = null;

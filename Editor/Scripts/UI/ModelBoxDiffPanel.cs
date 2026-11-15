@@ -101,12 +101,13 @@ namespace ModelBox
         {
             _candidates.Clear();
             _candidateIndexByMat.Clear();
+            var selectionManager = ModelBoxSelectionManager.Instance;
 
             foreach (var rend in selected.GetComponentsInChildren<Renderer>())
             {
                 if (rend == null || !rend.enabled || !rend.gameObject.activeInHierarchy) continue;
                 Material[] mats;
-                try { mats = rend.sharedMaterials; }
+                try { mats = selectionManager != null ? selectionManager.GetOriginalMaterials(rend) : rend.sharedMaterials; }
                 catch { continue; /* Renderer 可能已被销毁 */ }
 
                 for (int i = 0; i < mats.Length; i++)
@@ -325,7 +326,8 @@ namespace ModelBox
             }
 
             Material[] materials;
-            try { materials = _targetRenderer.sharedMaterials; }
+            var selectionManager = ModelBoxSelectionManager.Instance;
+            try { materials = selectionManager != null ? selectionManager.GetOriginalMaterials(_targetRenderer) : _targetRenderer.sharedMaterials; }
             catch { DrawEmptyState("Renderer 已不可用。"); return; }
 
             // 获取选中槽位的材质
@@ -440,22 +442,28 @@ namespace ModelBox
             string filterLower = _searchFilter?.ToLower() ?? "";
             bool hasFilter = !string.IsNullOrEmpty(_searchFilter);
 
+            foreach (var keyword in shader.keywordSpace.keywordNames)
+            {
+                _totalCount++;
+                if (_originalMaterial.IsKeywordEnabled(keyword) != _sandboxMaterial.IsKeywordEnabled(keyword))
+                    _diffCount++;
+            }
+
             for (int i = 0; i < count; i++)
             {
+                string name = shader.GetPropertyName(i);
+                var type = shader.GetPropertyType(i);
+                bool differs = ValuesDiffer(name, type);
+                _totalCount++;
+                if (differs) _diffCount++;
+
                 var flags = shader.GetPropertyFlags(i);
                 bool isHidden = (flags & ShaderPropertyFlags.HideInInspector) != 0;
 
                 // "全部" 开关：显示所有属性（包括被 keyword 隐藏的）
                 if (isHidden && !_showAllProperties) continue;
 
-                string name = shader.GetPropertyName(i);
-                var type = shader.GetPropertyType(i);
-
                 if (hasFilter && !name.ToLower().Contains(filterLower)) continue;
-
-                bool differs = ValuesDiffer(name, type);
-                _totalCount++;
-                if (differs) _diffCount++;
 
                 if (_showOnlyDifferences && !differs) continue;
 
@@ -665,7 +673,7 @@ namespace ModelBox
                 if (GUILayout.Button($"应用到原始（{_diffCount} 项差异）", GUILayout.Height(30)))
                 {
                     if (EditorUtility.DisplayDialog("应用确认",
-                        $"将 {_diffCount} 个差异属性写入原始材质？\n可通过 Ctrl+Z 撤销。",
+                        $"将 {_diffCount} 项材质差异写入原始材质？\n可通过 Ctrl+Z 撤销。",
                         "确定", "取消"))
                     {
                         ApplyToOriginal();
@@ -707,6 +715,11 @@ namespace ModelBox
                 Debug.Log("[ModelBox] 材质沙盒启动：已自动关闭选区调试（两者互斥，保护材质恢复链）。");
                 selMgr.SetMode(SelectionDebugMode.None);
             }
+
+            if (_targetRenderer == null) return;
+            var materials = _targetRenderer.sharedMaterials;
+            if (slotIndex < 0 || slotIndex >= materials.Length || materials[slotIndex] == null) return;
+            original = materials[slotIndex];
 
             // 创建临时副本
             _sandboxMaterial = new Material(original)
