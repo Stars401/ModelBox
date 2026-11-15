@@ -693,7 +693,7 @@ namespace ModelBox
                         DrawMeshOverlayGPU(renderer, data, camera);
                     else
                     {
-                        DrawMeshOverlayLegacy(renderer, data);
+                        DrawMeshOverlayLegacy(renderer, data, camera);
                         if (hasBoneWeight)
                         {
                             var settings = ModelBoxSettings.GetOrCreate();
@@ -751,7 +751,7 @@ namespace ModelBox
                 var nMesh = ModelBoxOverlayRenderer.GetOrBuildStretchLineMesh(data, false, NormalWidth > 1f);
                 if (nMesh != null)
                 {
-                    ModelBoxOverlayRenderer.DrawOverlayLineMesh(nMesh, matrix, camera, NormalColor, NormalLength, depthTest, NormalWidth);
+                    ModelBoxOverlayRenderer.DrawOverlayLineMesh(nMesh, matrix, camera, NormalColor, NormalLength, depthTest, NormalWidth, true);
                 }
                 else
                 {
@@ -810,7 +810,7 @@ namespace ModelBox
         /// <summary>
         /// Legacy 回退路径：逐基元 Handles 调用。低面数物体下视觉效果更好（原生 AA）。
         /// </summary>
-        private void DrawMeshOverlayLegacy(Renderer renderer, CachedMeshData data)
+        private void DrawMeshOverlayLegacy(Renderer renderer, CachedMeshData data, Camera camera)
         {
             var matrix = renderer.transform.localToWorldMatrix;
 
@@ -867,22 +867,7 @@ namespace ModelBox
 
             if ((OverlayFlags & MeshOverlayFlags.Normals) != 0)
             {
-                Handles.color = NormalColor;
-                Handles.matrix = matrix;
-                var verts = data.Vertices;
-                var norms = data.Normals;
-                // [fix v0.4.1] 防御性 null 检查：网格可能没有法线数据
-                if (verts != null && norms != null && norms.Length == verts.Length)
-                {
-                    for (int i = 0; i < verts.Length; i++)
-                    {
-                        Vector3 end = verts[i] + norms[i] * NormalLength;
-                        if (NormalWidth > 1f)
-                            Handles.DrawAAPolyLine(NormalWidth, verts[i], end);
-                        else
-                            Handles.DrawLine(verts[i], end);
-                    }
-                }
+                ModelBoxOverlayRenderer.DrawNormals(data, matrix, NormalColor, NormalLength, NormalWidth, camera, renderer.bounds);
             }
 
             if ((OverlayFlags & MeshOverlayFlags.Tangents) != 0)

@@ -481,7 +481,7 @@ namespace ModelBox
         /// stretchLength > 0 时 tip 顶点沿烘焙方向拉伸（法线/切线）；为 0 时原样渲染（线框）。
         /// </summary>
         public static void DrawOverlayLineMesh(Mesh lineMesh, Matrix4x4 localToWorld, Camera camera,
-            Color color, float stretchLength, bool depthTest, float width = 1f)
+            Color color, float stretchLength, bool depthTest, float width = 1f, bool normalDirection = false)
         {
             // [fix] 立即模式绘制仅在 Repaint 事件有效（与 Handles.DrawLine 一致）；
             // Layout/MouseMove 等事件中 DrawMeshNow 无渲染目标，纯浪费且可能产生告警
@@ -498,6 +498,7 @@ namespace ModelBox
             }
             mat.SetColor("_Color", color);
             mat.SetFloat("_Length", stretchLength);
+            mat.SetFloat("_NormalDirection", normalDirection ? 1f : 0f);
             mat.SetFloat("_LineWidth", width > 1f ? width * EditorGUIUtility.pixelsPerPoint : 0f);
             mat.SetVector("_ViewportSize", new Vector4(camera.pixelWidth, camera.pixelHeight, 0f, 0f));
 
@@ -675,8 +676,8 @@ namespace ModelBox
                     {
                         hideFlags = HideFlags.HideAndDontSave
                     };
-                    _boneWeightSurfaceMat.SetInt("_ZTest", (int)CompareFunction.LessEqual);
                 }
+                _boneWeightSurfaceMat.SetInt("_ZTest", (int)CompareFunction.LessEqual);
                 return _boneWeightSurfaceMat;
             }
             else
@@ -829,9 +830,9 @@ namespace ModelBox
             if (data.Normals == null || data.Normals.Length < data.Vertices.Length) return;
 
             if (width > 1f)
-                DrawThickDirectionLines(data.Vertices, data.Normals, localToWorld, color, length, width, camera, worldBounds);
+                DrawThickDirectionLines(data.Vertices, data.Normals, localToWorld, color, length, width, camera, worldBounds, true);
             else
-                DrawThinDirectionLines(data.Vertices, data.Normals, localToWorld, color, length, camera, worldBounds);
+                DrawThinDirectionLines(data.Vertices, data.Normals, localToWorld, color, length, camera, worldBounds, true);
         }
 
         /// <summary>
@@ -988,7 +989,7 @@ namespace ModelBox
         /// 性能：从 N 次 DrawLine 降为 1 次 DrawLines。
         /// </summary>
         private static void DrawThinDirectionLines(Vector3[] verts, Vector3[] dirs,
-            Matrix4x4 localToWorld, Color color, float length, Camera camera, Bounds worldBounds)
+            Matrix4x4 localToWorld, Color color, float length, Camera camera, Bounds worldBounds, bool normalDirection = false)
         {
             if (verts == null || dirs == null || verts.Length == 0) return;
             if (dirs.Length < verts.Length) return;
@@ -1004,11 +1005,15 @@ namespace ModelBox
                 _directionLinesBuffer = new Vector3[Mathf.Max(pairCount, 512)];
 
             // 构建 line pairs（世界空间）
+            Matrix4x4 normalToWorld = normalDirection && Mathf.Abs(localToWorld.determinant) > 1e-20f
+                ? localToWorld.inverse.transpose : default;
             int idx = 0;
             for (int i = 0; i < verts.Length; i += step)
             {
                 Vector3 start = localToWorld.MultiplyPoint3x4(verts[i]);
-                Vector3 end = localToWorld.MultiplyPoint3x4(verts[i] + dirs[i] * length);
+                Vector3 end = normalDirection
+                    ? start + ComputeNormalOffset(localToWorld, normalToWorld, dirs[i], length)
+                    : localToWorld.MultiplyPoint3x4(verts[i] + dirs[i] * length);
                 _directionLinesBuffer[idx++] = start;
                 _directionLinesBuffer[idx++] = end;
             }
@@ -1030,22 +1035,33 @@ namespace ModelBox
         /// Handles.DrawAAPolyLine 支持抗锯齿粗线，视觉效果优于 GL.LINES。
         /// </summary>
         private static void DrawThickDirectionLines(Vector3[] verts, Vector3[] dirs,
-            Matrix4x4 localToWorld, Color color, float length, float width, Camera camera, Bounds worldBounds)
+            Matrix4x4 localToWorld, Color color, float length, float width, Camera camera, Bounds worldBounds, bool normalDirection = false)
         {
             if (verts == null || dirs == null || verts.Length == 0) return;
             if (dirs.Length < verts.Length) return;
 
             int step = ComputeVertexLODStep(worldBounds, camera, verts.Length);
+            Matrix4x4 normalToWorld = normalDirection && Mathf.Abs(localToWorld.determinant) > 1e-20f
+                ? localToWorld.inverse.transpose : default;
 
-            using (new Handles.DrawingScope(color, localToWorld))
+            using (new Handles.DrawingScope(color, normalDirection ? Matrix4x4.identity : localToWorld))
             {
                 for (int i = 0; i < verts.Length; i += step)
                 {
-                    Vector3 start = verts[i];
-                    Vector3 end = start + dirs[i] * length;
+                    Vector3 start = normalDirection ? localToWorld.MultiplyPoint3x4(verts[i]) : verts[i];
+                    Vector3 end = start + (normalDirection
+                        ? ComputeNormalOffset(localToWorld, normalToWorld, dirs[i], length)
+                        : dirs[i] * length);
                     Handles.DrawAAPolyLine(width, start, end);
                 }
             }
+        }
+
+        private static Vector3 ComputeNormalOffset(Matrix4x4 localToWorld, Matrix4x4 normalToWorld,
+            Vector3 normal, float length)
+        {
+            float scaledLength = localToWorld.MultiplyVector(normal).magnitude * length;
+            return normalToWorld.MultiplyVector(normal).normalized * scaledLength;
         }
 
         // ========== LOD [Task 8] ==========

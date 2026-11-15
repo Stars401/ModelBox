@@ -4,6 +4,7 @@ Shader "Hidden/ModelBox/OverlayLine"
     {
         _Color("Color", Color) = (1, 1, 1, 1)
         _Length("Stretch Length", Float) = 0.1
+        _NormalDirection("Normal Direction", Float) = 0
         _LineWidth("Line Width", Float) = 0
         _ViewportSize("Viewport Size", Vector) = (1, 1, 1, 1)
         _ZTest("ZTest", Int) = 4
@@ -43,6 +44,7 @@ Shader "Hidden/ModelBox/OverlayLine"
 
             half4 _Color;
             float _Length;
+            float _NormalDirection;
             float _LineWidth;
             float4 _ViewportSize;
 
@@ -61,10 +63,25 @@ Shader "Hidden/ModelBox/OverlayLine"
             v2f vert(appdata v)
             {
                 v2f o;
+                float3 stretchDirection = v.normal;
+                if (_NormalDirection > 0.5)
+                {
+                    stretchDirection = 0;
+                    float matrixDeterminant = abs(determinant((float3x3)unity_ObjectToWorld));
+                    if (dot(v.normal, v.normal) > 1e-20 && matrixDeterminant > 1e-20)
+                    {
+                        float3 oldWorldDirection = mul((float3x3)unity_ObjectToWorld, v.normal);
+                        float3 normalWS = mul(v.normal, (float3x3)unity_WorldToObject);
+                        normalWS *= rsqrt(max(dot(normalWS, normalWS), 1e-20));
+                        // 仅修正方向，保留此前随模型缩放的线段长度。
+                        stretchDirection = mul((float3x3)unity_WorldToObject,
+                            normalWS * length(oldWorldDirection));
+                    }
+                }
                 if (_LineWidth > 0)
                 {
                     float4 start = UnityObjectToClipPos(v.vertex.xyz);
-                    float4 end = UnityObjectToClipPos(v.vertex.xyz + v.normal * _Length);
+                    float4 end = UnityObjectToClipPos(v.vertex.xyz + stretchDirection * _Length);
                     float startW = start.w < 0 ? min(start.w, -1e-5) : max(start.w, 1e-5);
                     float endW = end.w < 0 ? min(end.w, -1e-5) : max(end.w, 1e-5);
                     float2 viewport = max(_ViewportSize.xy, float2(1, 1));
@@ -77,7 +94,7 @@ Shader "Hidden/ModelBox/OverlayLine"
                 }
                 else
                 {
-                    float3 pos = v.vertex.xyz + v.normal * (_Length * v.uv.x);
+                    float3 pos = v.vertex.xyz + stretchDirection * (_Length * v.uv.x);
                     o.pos = UnityObjectToClipPos(pos);
                 }
                 return o;
