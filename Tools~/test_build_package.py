@@ -48,6 +48,9 @@ class PackagingTests(unittest.TestCase):
             for member in source.getmembers():
                 if member.name in remove:
                     continue
+                if member.isdir():
+                    target.addfile(member)
+                    continue
                 data = source.extractfile(member).read()
                 data = (changes or {}).get(member.name, data)
                 member.size = len(data)
@@ -85,6 +88,48 @@ class PackagingTests(unittest.TestCase):
             meta = archive.extractfile(guid + "/asset.meta").read()
             self.assertIn(("guid: " + guid).encode("ascii"), meta)
             self.assertIn(b"folderAsset: yes", meta)
+
+    def test_unitypackage_gzip_header_is_native_compatible(self):
+        data = self.unitypackage.read_bytes()
+        actual = {
+            "magic_method_flags": data[:4],
+            "mtime": int.from_bytes(data[4:8], "little"),
+            "compression_flags": data[8],
+            "operating_system": data[9],
+            "filename": data[10:data.index(b"\x00", 10)],
+        }
+        expected = {
+            "magic_method_flags": b"\x1f\x8b\x08\x08",
+            "mtime": 0,
+            "compression_flags": 4,
+            "operating_system": 0,
+            "filename": b"archtemp.tar",
+        }
+        for field, value in expected.items():
+            with self.subTest(field=field):
+                self.assertEqual(value, actual[field])
+
+    def test_unitypackage_gzip_is_independent_of_output_filename(self):
+        second = self.unitypackage.with_name(self._testMethodName + "-second.unitypackage")
+        build_package.build_unitypackage(self.entries, second)
+        self.assertEqual(self.unitypackage.read_bytes(), second.read_bytes())
+
+    def test_unitypackage_has_explicit_guid_directories_before_members(self):
+        with tarfile.open(self.unitypackage) as archive:
+            seen_directories = set()
+            for member in archive.getmembers():
+                guid = member.name.split("/")[0]
+                if member.isdir():
+                    self.assertEqual(guid, member.name)
+                    seen_directories.add(guid)
+                else:
+                    self.assertIn(guid, seen_directories, "Unity's importer requires each GUID directory before its files.")
+            self.assertEqual(len(self.entries), len(seen_directories))
+
+    def test_unitypackage_validator_requires_explicit_guid_directories(self):
+        output = self.rewrite_unitypackage(remove=("00000000000000000000000000000005",))
+        with self.assertRaises(SystemExit):
+            build_package.validate(output)
 
     def test_unitypackage_validator_rejects_changed_asset_bytes(self):
         path = "00000000000000000000000000000005/asset"

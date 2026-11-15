@@ -9,6 +9,7 @@
 排除:     Tests（依赖测试框架）/ Documentation~（README 截图）
 """
 
+import gzip
 import io
 import json
 import os
@@ -63,13 +64,20 @@ def read_meta(rel, is_dir):
 def build_unitypackage(entries, out_path):
     """GUID 目录制: <guid>/asset + <guid>/asset.meta + <guid>/pathname"""
     seen_guids = {}
-    with tarfile.open(out_path, "w:gz", format=tarfile.GNU_FORMAT, compresslevel=9) as tar:
+    compressed = io.BytesIO()
+    with gzip.GzipFile(filename="archtemp.tar", mode="wb", compresslevel=1, mtime=0,
+                       fileobj=compressed) as gzip_stream, \
+            tarfile.open(fileobj=gzip_stream, mode="w", format=tarfile.GNU_FORMAT) as tar:
 
-        def add(name, data):
+        def add(name, data=None):
             info = tarfile.TarInfo(name)
-            info.size = len(data)
+            if data is None:
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+            else:
+                info.size = len(data)
             info.mtime = int(os.path.getmtime(os.path.join(ROOT, rel) if rel else ROOT))
-            tar.addfile(info, io.BytesIO(data))
+            tar.addfile(info, io.BytesIO(data) if data is not None else None)
 
         for rel, is_dir in entries:
             meta_bytes, guid = read_meta(rel, is_dir)
@@ -77,11 +85,18 @@ def build_unitypackage(entries, out_path):
                 sys.exit(f"ERROR: GUID 重复 {guid}: {seen_guids[guid]} vs {rel}")
             seen_guids[guid] = rel
             pathname = ASSETS_PREFIX + (("/" + rel) if rel else "")
+            add(guid)
             add(f"{guid}/asset.meta", meta_bytes)
             add(f"{guid}/pathname", pathname.encode("utf-8"))
             if not is_dir:
                 with open(os.path.join(ROOT, rel), "rb") as f:
                     add(f"{guid}/asset", f.read())
+
+    # Match Unity's native gzip wrapper, including its FAT OS marker.
+    data = bytearray(compressed.getvalue())
+    data[9] = 0
+    with open(out_path, "wb") as f:
+        f.write(data)
     return seen_guids
 
 
@@ -102,6 +117,7 @@ def expected_members(entries, unitypackage):
             sys.exit(f"ERROR: GUID 重复 {guid}: {seen_guids[guid]} vs {rel}")
         seen_guids[guid] = rel
         if unitypackage:
+            expected[guid] = None
             expected[f"{guid}/asset.meta"] = meta_bytes
             pathname = ASSETS_PREFIX + (("/" + rel) if rel else "")
             expected[f"{guid}/pathname"] = pathname.encode("utf-8")
