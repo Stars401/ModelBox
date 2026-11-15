@@ -368,7 +368,7 @@ namespace ModelBox
 
             EditorGUI.BeginChangeCheck();
             _isPreviewing = GUILayout.Toggle(_isPreviewing,
-                _isPreviewing ? "预览 ON (Scene中可见)" : "预览 OFF",
+                new GUIContent("预览", "在 Scene 中预览沙盒材质"),
                 EditorStyles.toolbarButton, GUILayout.Height(24));
             if (EditorGUI.EndChangeCheck())
             {
@@ -380,14 +380,14 @@ namespace ModelBox
                 ResetSandbox();
             }
 
-            _showOnlyDifferences = GUILayout.Toggle(_showOnlyDifferences, "仅差异", EditorStyles.toolbarButton, GUILayout.Width(54));
-            _showAllProperties = GUILayout.Toggle(_showAllProperties, new GUIContent("显示隐藏", "显示被 keyword 隐藏的属性（如 Normal Map、Emission 等）"), EditorStyles.toolbarButton, GUILayout.Width(64));
+            _showOnlyDifferences = GUILayout.Toggle(_showOnlyDifferences, "仅差异", EditorStyles.toolbarButton, GUILayout.Width(54), GUILayout.Height(24));
+            _showAllProperties = GUILayout.Toggle(_showAllProperties, new GUIContent("显示隐藏", "显示被 keyword 隐藏的属性（如 Normal Map、Emission 等）"), EditorStyles.toolbarButton, GUILayout.Width(64), GUILayout.Height(24));
 
             GUILayout.FlexibleSpace();
 
-            EditorGUILayout.LabelField($"差异: {_diffCount} / 共: {_totalCount}", EditorStyles.miniLabel, GUILayout.Width(90));
-
             EditorGUILayout.EndHorizontal();
+            EditorGUILayout.Space(2);
+            EditorGUILayout.LabelField($"差异: {_diffCount} / 共: {_totalCount}", EditorStyles.miniLabel);
 
             // 关键 keyword 快速启用（当有隐藏属性或"显示隐藏"开启时显示）
             if (_sandboxMaterial != null && HasHiddenProperties())
@@ -518,7 +518,7 @@ namespace ModelBox
             if (differs && _originalMaterial != null)
             {
                 GUILayout.FlexibleSpace();
-                if (GUILayout.Button("↺", GUILayout.Width(22), GUILayout.Height(16)))
+                if (GUILayout.Button(new GUIContent("↺", "恢复此属性的原始值"), GUILayout.Width(22), GUILayout.Height(22)))
                 {
                     CopyPropertyValue(_originalMaterial, _sandboxMaterial, name, type);
                 }
@@ -617,8 +617,8 @@ namespace ModelBox
                 ("_CLEARCOAT",           "Clear Coat",     "启用 Clear Coat 涂层"),
             };
 
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("解锁属性：", EditorStyles.miniLabel, GUILayout.Width(64));
+            EditorGUILayout.LabelField("解锁属性", EditorStyles.miniLabel);
+            int column = 0;
 
             foreach (var (keyword, label, tooltip) in keywordGroups)
             {
@@ -627,11 +627,14 @@ namespace ModelBox
                 if (!localKw.isValid)
                     continue;
 
+                if (column == 0) EditorGUILayout.BeginHorizontal();
+
                 bool isEnabled = _sandboxMaterial.IsKeywordEnabled(keyword);
                 var prevBg = GUI.backgroundColor;
                 if (isEnabled) GUI.backgroundColor = new Color(0.3f, 0.7f, 0.3f, 0.7f);
 
-                if (GUILayout.Button(new GUIContent(label, tooltip), EditorStyles.miniButton, GUILayout.Height(18)))
+                if (GUILayout.Button(new GUIContent(label, tooltip), EditorStyles.miniButton,
+                    GUILayout.MinWidth(0), GUILayout.ExpandWidth(true), GUILayout.Height(22)))
                 {
                     if (isEnabled)
                         _sandboxMaterial.DisableKeyword(keyword);
@@ -639,9 +642,14 @@ namespace ModelBox
                         _sandboxMaterial.EnableKeyword(keyword);
                 }
                 GUI.backgroundColor = prevBg;
+                if (++column == 2)
+                {
+                    EditorGUILayout.EndHorizontal();
+                    column = 0;
+                }
             }
 
-            EditorGUILayout.EndHorizontal();
+            if (column != 0) EditorGUILayout.EndHorizontal();
             EditorGUILayout.Space(2);
         }
 

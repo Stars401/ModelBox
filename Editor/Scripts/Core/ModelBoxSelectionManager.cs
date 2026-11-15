@@ -63,11 +63,10 @@ namespace ModelBox
         public Color NormalColor { get; set; } = new Color(0.3f, 0.6f, 1f, 0.7f);
         public float VertexSize { get; set; } = 0.03f;
         public float NormalLength { get; set; } = 0.1f;
-        public float NormalWidth { get; set; } = 1f; // [perf v0.6] 默认细线走烘焙线网格快速路径；>1 为逐线粗线（高面数明显变慢）
+        public float NormalWidth { get; set; } = 1f;
         public bool VertexScaleIndependent { get; set; } = true;
 
-        // [fix] GPU 加速开关默认关闭：烘焙线网格路径在部分环境下输出仍不正确，
-        // 默认走 Legacy Handles 路径保证显示正确；用户可按需手动开启
+        // 保留显式开启方式，两个 UI 入口共享此状态。
         public bool UseGPURendering { get; set; } = false;
 
         // 切线叠加

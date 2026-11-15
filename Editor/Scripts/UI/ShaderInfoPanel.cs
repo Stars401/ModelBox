@@ -138,9 +138,11 @@ namespace ModelBox
             }
 
             // Shader 名称
+            float nameRowHeight = EditorGUIUtility.singleLineHeight;
             EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("Shader", EditorStyles.boldLabel, GUILayout.Width(44));
-            EditorGUILayout.SelectableLabel(_cachedData?.ShaderName ?? shader.name, EditorStyles.miniLabel);
+            EditorGUILayout.LabelField("Shader", EditorStyles.label, GUILayout.Width(44), GUILayout.Height(nameRowHeight));
+            EditorGUILayout.SelectableLabel(_cachedData?.ShaderName ?? shader.name, EditorStyles.label,
+                GUILayout.Height(nameRowHeight), GUILayout.MinWidth(0), GUILayout.ExpandWidth(true));
             EditorGUILayout.EndHorizontal();
 
             // 概要行

@@ -526,39 +526,9 @@ namespace ModelBox
                     }
                     EditorGUILayout.EndHorizontal();
 
-                    // 叠加样式控件（仅在有叠加激活时显示）
-                    if (flags != MeshOverlayFlags.None)
-                    {
-                        EditorGUI.BeginChangeCheck();
-                        if ((flags & MeshOverlayFlags.Wireframe) != 0)
-                            selManager.WireframeColor = EditorGUILayout.ColorField("线框颜色", selManager.WireframeColor);
-                        if ((flags & MeshOverlayFlags.Vertices) != 0)
-                        {
-                            selManager.VertexColor = EditorGUILayout.ColorField("顶点颜色", selManager.VertexColor);
-                            selManager.VertexSize = EditorGUILayout.Slider("顶点大小", selManager.VertexSize, 0.005f, 0.3f);
-                        }
-                        if ((flags & MeshOverlayFlags.Normals) != 0)
-                        {
-                            selManager.NormalColor = EditorGUILayout.ColorField("法线颜色", selManager.NormalColor);
-                            // [fix] 最小值 0.01→0.001：大模型近距离观察时 0.01 仍过长
-                            selManager.NormalLength = EditorGUILayout.Slider("法线长度", selManager.NormalLength, 0.001f, 0.5f);
-                        }
-                        if ((flags & MeshOverlayFlags.Tangents) != 0)
-                        {
-                            selManager.TangentColor = EditorGUILayout.ColorField("切线颜色", selManager.TangentColor);
-                            // [fix] 最小值 0.01→0.001：与法线长度保持一致
-                            selManager.TangentLength = EditorGUILayout.Slider("切线长度", selManager.TangentLength, 0.001f, 0.5f);
-                        }
-                        if ((flags & MeshOverlayFlags.Bounds) != 0)
-                            selManager.BoundsColor = EditorGUILayout.ColorField("AABB 颜色", selManager.BoundsColor);
-                        // [feat v0.6] 局部坐标轴长度（轴长 = 合并包围盒对角线 × 系数）
-                        if ((flags & MeshOverlayFlags.LocalAxes) != 0)
-                            selManager.LocalAxesLength = EditorGUILayout.Slider(
-                                new GUIContent("局部坐标轴长度", "轴长 = 选中层级合并包围盒对角线 × 系数"),
-                                selManager.LocalAxesLength, 0.1f, 2f);
-                        if (EditorGUI.EndChangeCheck())
-                            EditorApplication.delayCall += () => SceneView.RepaintAll();
-                    }
+                    EditorGUILayout.Space(2);
+                    ModelBoxSelectionInspector.DrawGPURenderingToggle(selManager);
+                    ModelBoxSelectionInspector.DrawOverlayStyleControls(selManager);
 
                     // [feat v0.6.x] 顶点色激活时在检查页展开通道隔离（RGB/R/G/B/A），免跳转物体页
                     if (selManager.CurrentMode == SelectionDebugMode.VertexColor)

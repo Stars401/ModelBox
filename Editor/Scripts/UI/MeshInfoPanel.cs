@@ -57,9 +57,11 @@ namespace ModelBox
             }
 
             // Mesh 名称 + 分隔线
+            float nameRowHeight = EditorGUIUtility.singleLineHeight;
             EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("Mesh", EditorStyles.boldLabel, GUILayout.Width(42));
-            EditorGUILayout.SelectableLabel(mesh.name, EditorStyles.miniLabel);
+            EditorGUILayout.LabelField("Mesh", EditorStyles.label, GUILayout.Width(42), GUILayout.Height(nameRowHeight));
+            EditorGUILayout.SelectableLabel(mesh.name, EditorStyles.label,
+                GUILayout.Height(nameRowHeight), GUILayout.MinWidth(0), GUILayout.ExpandWidth(true));
             EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.Space(2);

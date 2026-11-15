@@ -306,7 +306,8 @@ namespace ModelBox
 
                 // ===== 双行工具栏布局 =====
                 float row1Width = 16f + 36f + 68f + 8f + 36f + 4f; // ≡ + Off + 模式▾ + gap + R + pad
-                float row2Width = 36f + 42f + 36f + 24f + 24f + 4f + 42f + 4f; // SEL + Split + 冻结 + SA + SB + gap + Snap + pad
+                float row2Width = 14f + 36f + 42f + 36f + 24f + 24f + 4f + 42f
+                    + EditorStyles.label.margin.horizontal + 6f * EditorStyles.toolbarButton.margin.horizontal;
                 float toolbarWidth = Mathf.Max(row1Width, row2Width) + 8f;
                 float toolbarHeight = 54f; // 两行(24px each) + 间距(6px)
 

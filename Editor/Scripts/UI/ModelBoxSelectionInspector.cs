@@ -540,17 +540,35 @@ namespace ModelBox
 
             // GPU 加速开关 + 网格信息
             EditorGUILayout.Space(2);
+            DrawGPURenderingToggle(manager);
+
+            // 显示选中物体的网格面数/顶点数
+            DrawMeshStats();
+            EditorGUILayout.Space(2);
+            DrawOverlayStyleControls(manager);
+        }
+
+        public static void DrawGPURenderingToggle(ModelBoxSelectionManager manager)
+        {
             EditorGUI.BeginChangeCheck();
-            bool gpuToggle = EditorGUILayout.Toggle("GPU 加速（推荐高面数）", manager.UseGPURendering);
+            bool gpuToggle = EditorGUILayout.Toggle(
+                new GUIContent("GPU 加速", "使用 GPU 批量绘制网格叠加，推荐用于高面数模型。"), manager.UseGPURendering);
             if (EditorGUI.EndChangeCheck())
             {
                 manager.UseGPURendering = gpuToggle;
                 EditorApplication.delayCall += () => SceneView.RepaintAll();
             }
+        }
 
-            // 显示选中物体的网格面数/顶点数
-            DrawMeshStats();
-            EditorGUILayout.Space(2);
+        public static void DrawOverlayStyleControls(ModelBoxSelectionManager manager)
+        {
+            var flags = manager.OverlayFlags;
+            bool wire = (flags & MeshOverlayFlags.Wireframe) != 0;
+            bool vert = (flags & MeshOverlayFlags.Vertices) != 0;
+            bool norm = (flags & MeshOverlayFlags.Normals) != 0;
+            bool tan = (flags & MeshOverlayFlags.Tangents) != 0;
+            bool bnd = (flags & MeshOverlayFlags.Bounds) != 0;
+            bool axes = (flags & MeshOverlayFlags.LocalAxes) != 0;
 
             // 线框设置
             if (wire)
@@ -582,9 +600,8 @@ namespace ModelBox
                 manager.NormalColor = EditorGUILayout.ColorField("法线颜色", manager.NormalColor);
                 // [fix] 最小值 0.01→0.001：大模型近距离观察时 0.01 仍过长
                 manager.NormalLength = EditorGUILayout.Slider("法线长度", manager.NormalLength, 0.001f, 0.5f);
-                // [perf v0.6] 明确快速路径与慢路径分界
                 manager.NormalWidth = EditorGUILayout.Slider(
-                    new GUIContent("法线粗细", "1 = GPU 烘焙线网格快速路径（高面数模型推荐）；>1 使用逐线粗线绘制，高面数会明显变慢"),
+                    new GUIContent("法线粗细", "线条粗细。GPU 加速同时支持细线和粗线。"),
                     manager.NormalWidth, 1f, 8f);
                 if (EditorGUI.EndChangeCheck()) EditorApplication.delayCall += () => SceneView.RepaintAll();
                 EditorGUI.indentLevel--;
@@ -598,9 +615,8 @@ namespace ModelBox
                 manager.TangentColor = EditorGUILayout.ColorField("切线颜色", manager.TangentColor);
                 // [fix] 最小值 0.01→0.001：与法线长度保持一致
                 manager.TangentLength = EditorGUILayout.Slider("切线长度", manager.TangentLength, 0.001f, 0.5f);
-                // [perf v0.6] 同法线粗细提示
                 manager.TangentWidth = EditorGUILayout.Slider(
-                    new GUIContent("切线粗细", "1 = GPU 烘焙线网格快速路径（高面数模型推荐）；>1 使用逐线粗线绘制，高面数会明显变慢"),
+                    new GUIContent("切线粗细", "线条粗细。GPU 加速同时支持细线和粗线。"),
                     manager.TangentWidth, 1f, 8f);
                 if (EditorGUI.EndChangeCheck()) EditorApplication.delayCall += () => SceneView.RepaintAll();
                 EditorGUI.indentLevel--;

@@ -173,15 +173,17 @@ namespace ModelBox
                 // 激活模式描述（在分类末尾绘制，不打断网格）
                 if (!string.IsNullOrEmpty(activeTooltip))
                 {
-                    var descRect = EditorGUILayout.GetControlRect(false, 18);
+                    EditorGUILayout.Space(2);
+                    var descRect = GUILayoutUtility.GetRect(new GUIContent(activeTooltip),
+                        EditorStyles.wordWrappedMiniLabel, GUILayout.ExpandWidth(true));
                     EditorGUI.DrawRect(descRect, ModelBoxStyles.ActiveModeDescBgColor);
                     var prevCC = GUI.contentColor;
                     GUI.contentColor = EditorGUIUtility.isProSkin
                         ? new Color(0.75f, 0.85f, 0.75f)
                         : new Color(0.2f, 0.3f, 0.2f);
-                    GUI.Label(new Rect(descRect.x + 12, descRect.y, descRect.width - 12, descRect.height),
-                        activeTooltip, EditorStyles.wordWrappedMiniLabel);
+                    GUI.Label(descRect, activeTooltip, EditorStyles.wordWrappedMiniLabel);
                     GUI.contentColor = prevCC;
+                    EditorGUILayout.Space(2);
                     activeTooltip = null; // 重置，仅在激活模式所在分类显示
                 }
 

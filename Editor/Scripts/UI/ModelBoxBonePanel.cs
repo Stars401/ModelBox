@@ -176,7 +176,7 @@ namespace ModelBox
             if (node.ChildIndices.Count > 0 && !hasFilter)
             {
                 var prevBG = GUI.backgroundColor;
-                if (GUILayout.Button(isCollapsed ? "▶" : "▼", EditorStyles.miniButton, GUILayout.Width(18), GUILayout.Height(16)))
+                if (GUILayout.Button(isCollapsed ? "▶" : "▼", EditorStyles.miniButton, GUILayout.Width(22), GUILayout.Height(22)))
                 {
                     if (isCollapsed) _collapsedBones.Remove(index);
                     else _collapsedBones.Add(index);
@@ -185,7 +185,7 @@ namespace ModelBox
             }
             else
             {
-                GUILayout.Space(18);
+                GUILayout.Space(22);
             }
 
             // 骨骼名称按钮
@@ -203,7 +203,7 @@ namespace ModelBox
                     : new Color(0.3f, 0.3f, 0.3f);
 
             string prefix = isSelected ? "►" : (node.ChildIndices.Count > 0 ? "" : "·");
-            if (GUILayout.Button($"{prefix} [{index}] {node.Name}", EditorStyles.miniLabel))
+            if (GUILayout.Button($"{prefix} [{index}] {node.Name}", EditorStyles.miniLabel, GUILayout.Height(22)))
             {
                 _selectedBoneIndex = isSelected ? -1 : index;
                 // [feat] 立即同步到 SelectionManager（避免 delayCall 时序问题）
