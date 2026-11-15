@@ -1,10 +1,12 @@
 # modelBox — Unity URP 实时 Shader 调试可视化工具
 
-> **版本:** v0.6.1 | **作者:** Sky幻 | **Unity:** 2021.3+ | **管线:** URP 12.0+
+> **版本:** v0.7.0 | **作者:** Sky幻 | **Unity:** 2021.3+ | **管线:** URP 12.0+
+
+本次验证环境：Unity 2022.3.43f1、URP 14.0.11、Windows DX11。
 
 ![modelBox 场景调试 —— 平面法线模式](Documentation~/screenshots/scene-flat-normal.png)
 
-*▲ 场景调试 · 平面法线（Flat Normal）模式：Terrain 上以 `ddx/ddy` 交叉积计算逐像素平面法线并映射为 RGB，每一块平面呈现独立色块，平滑组/硬边分布一目了然。右侧面板按「几何数据 / 诊断模式 / 高级模式 / PBR 诊断 / 光照 & 材质」五组分类切换 35 种调试视图，SceneView 底部 PixelBar 实时回读鼠标指向像素的 RGBA 与深度。*
+*▲ 场景调试 · 平面法线（Flat Normal）模式：Terrain 上以 `ddx/ddy` 交叉积计算逐像素平面法线并映射为 RGB，每一块平面呈现独立色块，平滑组/硬边分布一目了然。右侧面板按「几何数据 / 诊断模式 / 高级模式 / PBR 诊断 / 光照 & 材质」五组分类切换 35 种调试视图。底部 PixelBar 显示 CPU 网格表面估算；不能可靠复现的屏幕空间结果显示 N/A。*
 
 ## 概述
 
@@ -16,11 +18,12 @@ modelBox 为 材质开发者提供**运行时实时、全场景覆盖**的调试
 - **35 种调试模式**：覆盖几何数据、诊断、PBR 分析、光照分离、导数诊断 5 大类别
 - **分屏对比**：左侧正常渲染 + 右侧调试模式，支持冻结快照和 A/B 帧对比
 - **选区调试**：对选中物体单独进行材质覆盖（贴图通道/棋盘格/属性颜色）和网格叠加（线框/顶点/法线/切线/AABB/局部坐标）
+- **GPU 网格叠加**：默认开启，检查页和物体页共享开关；选项旁显示「beta，如绘制异常请关闭」，关闭后使用 Handles 回退路径
 - **骨骼面板**(beta)：独立侧边栏页面，骨骼层级树、逐骨骼权重统计、搜索过滤
 - **Shader 信息面板**：查看/切换 Keywords（绿色高亮已启用）、Passes、Properties（可编辑 + Undo）
 - **Mesh 信息面板**：顶点数、UV 通道、子网格材质分配、LOD 层级预览
 - **材质沙盒**：A/B 材质参数 Diff，支持实时编辑和应用到原始
-- **像素拾取**(beta)：PixelBar 实时显示鼠标指向的物体/Shader/坐标/自定义属性
+- **表面与屏幕采样**(beta)：PixelBar 显示命中网格的通道估算、眼空间深度、物体/Shader/世界坐标/子材质槽属性；悬浮提示单独显示回读的 Screen RGBA
 - **可配置 HUD**：性能统计逐项开关（FPS [BETA] / DC / Tri / Vert / 总分配 / C#堆）
 - **一键安装/卸载**：自动配置 URP RendererFeature
 
@@ -45,6 +48,8 @@ modelBox 为 材质开发者提供**运行时实时、全场景覆盖**的调试
 
 > 三种方式携带同一套 `.meta`（GUID 一致），可无缝互换与升级；发行包由仓库内 `Tools~/build_package.py` 生成。
 
+v0.7.0 分发文件：`com.unity.modelbox-v0.7.0.unitypackage`（Unity 导入）和 `com.unity.modelbox-v0.7.0.zip`（Packages 安装）。离线包不包含测试和文档截图，完整图文见[在线 README](https://github.com/Stars401/ModelBox#readme)。同一项目只保留一种安装方式，避免重复程序集和 GUID。
+
 ### 首次配置
 
 1. 打开 `Tools > modelBox`
@@ -68,7 +73,7 @@ modelBox 为 材质开发者提供**运行时实时、全场景覆盖**的调试
 
 | 页面 | 图标 | 功能 |
 |------|------|------|
-| **检查** | In | 选中物体总览 + 快速叠加开关 + SEL/分屏/冻结控制 |
+| **检查** | In | 选中物体总览 + 快速叠加开关及样式 + GPU 加速 + SEL/分屏/冻结控制 |
 | **场景** | Sc | 35 种调试模式选择 + 参数调节 |
 | **物体** | Ob | 选区调试（贴图通道/UV棋盘格/Shader属性）+ Shader 信息 |
 | **沙盒** | Sb | 材质 A/B 对比测试 |
@@ -88,7 +93,7 @@ modelBox 为 材质开发者提供**运行时实时、全场景覆盖**的调试
 
 ![深度模式](Documentation~/screenshots/scene-depth.png)
 
-*▲ 深度检查模式：天空（最远）为纯黑，地形按线性深度渐变；底部状态条同步显示 FPS / DC / 三角面 / 顶点 / 显存 / C# 堆，PixelBar 回读 `R/G/B/A/Dp` 数值。*
+*▲ 深度检查模式：天空（最远）为纯黑，地形按线性深度渐变；底部状态条同步显示 FPS / DC / 三角面 / 顶点 / 显存 / C# 堆。新版 PixelBar 的 `Z` 为命中点沿相机前向的眼空间深度，单位为米，不是射线长度或原始深度缓冲值。*
 
 **UV0** 模式 —— 第一套 UV 坐标映射到 RG 颜色通道，模型表面按 UV 展开呈现渐变色块，UV 接缝、重叠、拉伸一眼定位：
 
@@ -191,9 +196,9 @@ modelBox 为 材质开发者提供**运行时实时、全场景覆盖**的调试
 
 | 叠加类型 | 说明 |
 |---------|------|
-| **线框** | 三角面边线，烘焙 Lines 拓扑网格单次 DrawMeshNow（顶点变换在 GPU，零逐帧 CPU） |
+| **线框** | 三角面边线，缓存 Lines 拓扑网格并批量 DrawMeshNow，顶点变换由 GPU 完成；蒙皮姿态仍需 CPU 烘焙 |
 | **顶点** | GPU 实例化球体标记（1023/batch），支持深度测试开关 |
-| **法线** | 顶点法线方向线，烘焙拉伸线网格（shader uniform 长度，滑条零重建）；宽度>1 保留逐线粗线 |
+| **法线** | 缓存拉伸线网格，长度通过 shader uniform 调节；细线与粗线均支持 GPU 批量绘制，非均匀缩放使用逆转置方向并保留原缩放长度 |
 | **切线** | 顶点切线方向线，同法线烘焙路径 |
 | **AABB** | 世界空间包围盒线框（12 条边） |
 | **局部坐标** | 模型原点（pivot）三向轴：X红/Y绿/Z蓝 + 圆锥箭头 + 轴标签，轴长随选中层级合并包围盒自适应（可调系数） |
@@ -202,10 +207,18 @@ modelBox 为 材质开发者提供**运行时实时、全场景覆盖**的调试
 
 ![网格顶点叠加](Documentation~/screenshots/object-wireframe-vertices.png)
 
-*▲ 线框 + 顶点叠加（实验）—— 暂时有点问题（
+*▲ 线框与顶点可组合叠加，颜色、尺寸和深度测试可独立调节。*
 
 > 同时支持 `MeshRenderer` 和 `SkinnedMeshRenderer`（BakeMesh 烘焙后叠加）。
 > 深度测试可在设置页切换：关闭后叠加点可穿透模型显示。
+
+### PixelBar 数据含义
+
+- 底栏标记 `CPU`，通过实际 Mesh/SkinnedMesh 表面求交，不以 Collider 外壳代替可见网格。局部/世界坐标、法线和眼空间深度各自使用对应空间。
+- 选区调试优先于全局调试；贴图来源及自定义属性按命中的子材质槽读取，不同物体与槽位不会串用贴图。
+- 贴图通道为基础 mip（LOD0）估算，保留 HDR/负值，支持 Point/双线性、逐轴 wrap、UV 通道和世界 UV 参数；不等同于 mip、各向异性过滤或后处理后的屏幕色。
+- FlatNormal、原始深度等无法可靠由 CPU 复现的模式显示 `N/A`。开启分屏时，底栏仍描述当前网格表面，不描述冻结快照。
+- 悬浮提示的 `Screen RGBA` 是实际目标纹理的颜色回读；不从该颜色反解精确法线、UV 或深度。底栏和工具栏在 3D 调试绘制之后显示，底栏区域拦截鼠标事件。
 
 ---
 
@@ -302,6 +315,7 @@ modelBox 为 材质开发者提供**运行时实时、全场景覆盖**的调试
 ```
 ┌─ UI 层 ──────────────────────────────────────────────────────────────┐
 │  ModelBoxWindow (7 页面 EditorWindow: 检查/场景/物体/沙盒/骨骼/网格/设置) │
+│  ModelBoxSceneGUI (统一 3D / 工具栏 / 提示 / 底栏绘制与输入顺序)       │
 │  ModelBoxSceneOverlay (SceneView 浮动工具栏, 分组下拉 + 分屏/冻结)   │
 │  ModelBoxBonePanel (骨骼侧边栏独立页面)                               │
 │  ModelBoxPixelBar (底部像素信息条)                                    │
@@ -329,7 +343,7 @@ modelBox 为 材质开发者提供**运行时实时、全场景覆盖**的调试
 
 | 模式类型 | 渲染路径 | 说明 |
 |---------|---------|------|
-| Geometry (29 种) | `overrideMaterial` + `DrawRenderers` | 单一最终全量 Pass @ AfterRenderingTransparents+2：渲染队列最后一次几何绘制，全队列（0..int.MaxValue）一次覆盖，调试效果不会被后续正常渲染覆盖 |
+| Geometry (29 种) | `overrideMaterial` + `DrawRenderers` | 单一最终全量 Pass @ AfterRenderingTransparents+2，覆盖 Unity 允许的 0..5000 队列；SceneView 插件 UI 随后绘制 |
 | ScreenSpace (3 种) | 全屏 Blit + 深度重建 | Depth, ScreenNormal, RayMarch |
 | Capture+Draw (3 种) | 双 Pass | OpaqueTexture, Overdraw, TransparencyLayers |
 | Overlay (6 种) | Handles API + Shader 底色 | Wireframe, Vertices, Normals, Tangents, Bounds, LocalAxes |
@@ -370,6 +384,7 @@ com.unity.modelbox/
 │   │   ├── UI/
 │   │   │   ├── ModelBoxWindow.cs               # 主 EditorWindow (7 页面)
 │   │   │   ├── ModelBoxSceneOverlay.cs         # SceneView 浮动工具栏
+│   │   │   ├── ModelBoxSceneGUI.cs             # 统一绘制与输入层级
 │   │   │   ├── ModelBoxModeSelector.cs         # 模式选择 UI
 │   │   │   ├── ModelBoxParameterControls.cs    # 参数调节 UI
 │   │   │   ├── ModelBoxPixelBar.cs             # 像素信息条
@@ -427,13 +442,22 @@ com.unity.modelbox/
 | **顶点动画丢失** | overrideMaterial 替换整个 Shader，自定义顶点动画丢失 | 这是 overrideMaterial 的根本限制 |
 | **FPS [BETA]** | Editor 中帧率基于时间差近似，非精确帧计数 | 设置中可关闭，仅作参考 |
 | **Overdraw 精度** | R8 格式饱和于 16 次绘制 | 可通过 Overdraw Max 滑条调整灵敏度 |
-| **像素拾取精度** | SceneView 中使用 Raycast 降级方案 | CPU 端近似值，非 GPU 实际输出 |
+| **表面采样精度** | PixelBar 为 CPU 网格估算，无法复现自定义顶点位移、屏幕导数与最终合成 | 无可靠参数的模式显示 N/A；最终颜色通过悬浮 Screen RGBA 查看 |
 
 ---
 
 ## 版本历史
 
-### v0.6.1（当前）
+### v0.7.0（当前）
+- **GPU 坐标修复**：分离相机矩阵与物体矩阵，修复移动、旋转后叠加法线仍位于世界原点的问题；隔离 Handles 状态，避免重复坐标变换。
+- **GPU 默认开启**：检查页、物体页共享 GPU 开关和样式控件，显示「beta，如绘制异常请关闭」；细线、粗线及蒙皮姿态复用批量绘制资源，非 Repaint 事件不烘焙绘制。
+- **法线与深度**：修复非均匀缩放下的法线方向，保持原长度表现；修复骨骼权重显示重新开启深度测试后仍穿透的问题。
+- **UI 层级与交互**：统一 SceneView 绘制入口，PixelBar 置于调试叠加之上；阻止工具栏、分割线和骨骼拾取穿透底栏，修复拖拽捕获及释放。
+- **参数与采样**：修复屏幕 RGBA 读回类型、DPI 坐标、异步模式快照、局部/世界法线、眼深、颜色映射、贴图 wrap/HDR 缓存及子材质槽来源，明确 CPU 估算与屏幕颜色的区别。
+- **体验与状态**：统一字体行高和间距，修复材质沙盒差异统计、选区同步、Keyword/Pass/参数 Undo，以及动画权重显示刷新。
+- **发行包**：提供 unitypackage 和 ZIP，保留文件及目录 `.meta`，校验归档内容与源文件一致。
+
+### v0.6.1
 - **修复 GPU 加速叠加线框/法线/切线完全不显示**：OverlayLine shader 由 URP HLSL 重写为内置 CG —— SceneView 立即模式（DrawMeshNow）不经过 SRP 渲染流程，URP 的 PerCamera/PerDraw 常量缓冲区不随 GL 矩阵绑定，顶点变换结果被裁剪导致整批不可见；CG 的 UNITY_MATRIX_MVP 直接取当前 GL 状态，与管线无关
 - **修复 GPU 顶点叠加部分顶点/线段不显示、随相机移动闪烁**：移除距离 LOD 抽稀（80m 外曾只画 10%）与 2 万实例强制上限（27K 顶点模型贴脸只显示一半）；视锥剔除余量由硬编码 0.5m 改为顶点球体实际世界半径，屏幕边缘不再闪烁进出
 - **修复 Depth/ShadowMap 屏幕空间模式黑屏/花屏**：ScreenSpaceBlitPass 与 ShadowMapPass 不再绑定相机深度附件 —— MSAA 关闭时其与 _CameraDepthTexture 为同一资源，同时作为深度附件与采样源构成 DSV/SRV 反馈环（D3D11 强制解绑 SRV，采样返回未定义数据）
@@ -448,7 +472,7 @@ com.unity.modelbox/
 - **叠加性能优化**：仅开启局部坐标轴时跳过网格缓存构建（该叠加不依赖网格数据，避免高面数模型无谓开销）
 - **高面数模型叠加性能重构**：线框/法线/切线改为烘焙 Lines 拓扑网格 + 单次 DrawMeshNow —— 顶点变换全部由 GPU 完成，消除每帧十万级 C# 矩阵乘法与 Handles.DrawLines 立即模式提交；法线/切线长度滑条改为 shader uniform 拉伸（uv tip 标记），拖动零重建；蒙皮网格与粗线（宽度>1）保留原路径；法线/切线默认宽度 2→1（默认体验即快速路径）
 - **局部坐标轴正确性加固**：端点/轴长计算抽为纯函数并以手算常量单元测试覆盖（Yaw/Pitch 旋转映射，逐分量容差断言）；轴长基准只统计网格类 Renderer（粒子不再撑大轴长）
-- **渲染队列最终 Pass 合并**：几何调试由双 Pass（opaque@100 + transparent@302）合并为单一最终全量 Pass（全队列 0..int.MaxValue @ AfterRenderingTransparents+2）—— 渲染队列最后一次几何绘制，杜绝任何正常渲染覆盖调试效果；自定义队列 >5000 物体不再漏覆盖；总绘制次数反而减少一次
+- **渲染队列最终 Pass 合并**：几何调试由双 Pass（opaque@100 + transparent@302）合并为单一最终全量 Pass（AfterRenderingTransparents+2），减少一次重复绘制。Unity 的 RenderQueueRange 有效范围为 0..5000，不支持超过该上限的队列。
 - **材质沙盒候选遍历修复**：候选改为跨 Renderer 聚合 + 按材质实例去重（修复"两个材质同时出现在待选选项"）；槽位替换按材质实例匹配 —— LOD 各级别/多部件材质布局不同时不再错替，材质的所有引用处同步预览
 - **检查页顶点色通道隔离**：顶点色激活时检查页直接展开 RGB/R/G/B/A 隔离选项，免跳转物体页
 - **三方调试互斥（深度交互审查）**：① 全局最终全量 Pass 不再覆盖被选区调试/材质沙盒替换了材质的物体 —— 本地（更具体）的调试优先（README「选区调试独立于全场景调试」语义落地）；② 沙盒与选区调试双向互斥守卫（沙盒启动自动关闭选区调试、沙盒活跃时拒绝选区调试），杜绝 sharedMaterials 恢复链互相污染导致的材质错乱

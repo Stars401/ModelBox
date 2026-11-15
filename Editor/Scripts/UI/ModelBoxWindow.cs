@@ -1,3 +1,4 @@
+using System.IO;
 using UnityEditor;
 using UnityEngine;
 
@@ -24,32 +25,45 @@ namespace ModelBox
         private static string _cachedVersion;
         private static Texture2D _logoTexture;
 
+        [System.Serializable]
+        private sealed class PackageManifest
+        {
+            public string name;
+            public string version;
+        }
+
         private static string GetPackageVersion()
         {
             if (_cachedVersion != null) return _cachedVersion;
-            var guids = AssetDatabase.FindAssets("com.unity.modelbox t:TextAsset", new[] { "Packages" });
+            var package = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(ModelBoxWindow).Assembly);
+            if (package != null && package.name == "com.unity.modelbox")
+                return _cachedVersion = package.version;
+
+            var guids = AssetDatabase.FindAssets("ModelBoxWindow t:MonoScript", new[] { "Assets" });
+            string assetsPath = Path.GetFullPath(Application.dataPath);
             foreach (var guid in guids)
             {
                 var path = AssetDatabase.GUIDToAssetPath(guid);
-                if (path.EndsWith("package.json"))
+                var script = AssetDatabase.LoadAssetAtPath<MonoScript>(path);
+                if (script == null || script.GetClass() != typeof(ModelBoxWindow)) continue;
+                var directory = new DirectoryInfo(Path.GetDirectoryName(Path.GetFullPath(path)));
+                while (directory != null && directory.FullName.StartsWith(assetsPath,
+                    System.StringComparison.OrdinalIgnoreCase))
                 {
-                    var json = AssetDatabase.LoadAssetAtPath<TextAsset>(path);
-                    if (json != null)
+                    var manifestPath = Path.Combine(directory.FullName, "package.json");
+                    if (File.Exists(manifestPath))
                     {
-                        var text = json.text;
-                        var marker = "\"version\":";
-                        var idx = text.IndexOf(marker);
-                        if (idx >= 0)
+                        try
                         {
-                            var start = text.IndexOf('"', idx + marker.Length);
-                            var end = text.IndexOf('"', start + 1);
-                            if (start >= 0 && end > start)
-                            {
-                                _cachedVersion = text.Substring(start + 1, end - start - 1);
-                                return _cachedVersion;
-                            }
+                            var manifest = JsonUtility.FromJson<PackageManifest>(File.ReadAllText(manifestPath));
+                            if (manifest != null && manifest.name == "com.unity.modelbox"
+                                && !string.IsNullOrEmpty(manifest.version))
+                                return _cachedVersion = manifest.version;
                         }
+                        catch (IOException) { }
+                        catch (System.ArgumentException) { }
                     }
+                    directory = directory.Parent;
                 }
             }
             _cachedVersion = "unknown";
