@@ -46,14 +46,13 @@ namespace ModelBox
 
         // SkinnedMeshRenderer 烘焙缓冲 [Task 9]
         private static Mesh _bakeMesh;
-        private static CachedMeshData _bakedCache;
-        private static Mesh _bakedSourceMesh; // [R5 fix] 跟踪源网格以检测拓扑变化
+        private static readonly System.Collections.Generic.Dictionary<SkinnedMeshRenderer, CachedMeshData> _skinnedCache
+            = new System.Collections.Generic.Dictionary<SkinnedMeshRenderer, CachedMeshData>();
 
         // [perf] BakeSkinnedMesh 零分配缓冲：用 GetVertices(List) 避免每帧分配大数组
         private static readonly System.Collections.Generic.List<Vector3> _bakeVertBuf = new System.Collections.Generic.List<Vector3>();
         private static readonly System.Collections.Generic.List<Vector3> _bakeNormBuf = new System.Collections.Generic.List<Vector3>();
         private static readonly System.Collections.Generic.List<Vector4> _bakeTanBuf = new System.Collections.Generic.List<Vector4>();
-        private static int _bakeLastVertCount;
 
         private const int MAX_INSTANCES_PER_CALL = 1023;
         private const string VERTEX_SHADER_NAME = "Hidden/ModelBox/OverlayVertex";
@@ -89,7 +88,7 @@ namespace ModelBox
                 edgeCount++;
             if (edgeCount == 0) return;
 
-            // 预变换顶点到世界空间（Handles.DrawLines 不使用 Handles.matrix）
+            // 预变换顶点到世界空间；提交时必须隔离 Handles.matrix，避免二次变换。
             int maxVertIdx = 0;
             int vertLimit = verts.Length; // [fix v0.4.1] 边界检查基准
             for (int i = 0; i < edges.Length; i += stride)
@@ -136,8 +135,8 @@ namespace ModelBox
                 _wireframeEdgeBuffer[idx++] = edges[i + 1];
             }
 
-            Handles.color = color;
-            Handles.DrawLines(_wireframePointsBuffer, _wireframeEdgeBuffer);
+            using (new Handles.DrawingScope(color, Matrix4x4.identity))
+                Handles.DrawLines(_wireframePointsBuffer, _wireframeEdgeBuffer);
 
             // [fix] 清除整个使用范围的变换标记（防止 LOD 步进变化后残留 stale true）
             // 之前只清除当前边涉及的顶点，但 LOD 步进变化后旧步进标记的顶点不会被清除
@@ -167,35 +166,36 @@ namespace ModelBox
             Vector3 p6 = new Vector3(max.x, max.y, max.z);
             Vector3 p7 = new Vector3(min.x, max.y, max.z);
 
-            Handles.color = color;
-
-            if (width > 1f)
+            using (new Handles.DrawingScope(color, Matrix4x4.identity))
             {
-                // 粗线模式：每条边用 DrawAAPolyLine 绘制
-                Handles.DrawAAPolyLine(width, p0, p1); Handles.DrawAAPolyLine(width, p1, p2);
-                Handles.DrawAAPolyLine(width, p2, p3); Handles.DrawAAPolyLine(width, p3, p0);
-                Handles.DrawAAPolyLine(width, p4, p5); Handles.DrawAAPolyLine(width, p5, p6);
-                Handles.DrawAAPolyLine(width, p6, p7); Handles.DrawAAPolyLine(width, p7, p4);
-                Handles.DrawAAPolyLine(width, p0, p4); Handles.DrawAAPolyLine(width, p1, p5);
-                Handles.DrawAAPolyLine(width, p2, p6); Handles.DrawAAPolyLine(width, p3, p7);
-            }
-            else
-            {
-                // 批量模式：一次 DrawLines 绘制 12 条边
-                if (_boundsPointsBuffer == null) _boundsPointsBuffer = new Vector3[24];
-                _boundsPointsBuffer[0] = p0; _boundsPointsBuffer[1] = p1;
-                _boundsPointsBuffer[2] = p1; _boundsPointsBuffer[3] = p2;
-                _boundsPointsBuffer[4] = p2; _boundsPointsBuffer[5] = p3;
-                _boundsPointsBuffer[6] = p3; _boundsPointsBuffer[7] = p0;
-                _boundsPointsBuffer[8] = p4; _boundsPointsBuffer[9] = p5;
-                _boundsPointsBuffer[10] = p5; _boundsPointsBuffer[11] = p6;
-                _boundsPointsBuffer[12] = p6; _boundsPointsBuffer[13] = p7;
-                _boundsPointsBuffer[14] = p7; _boundsPointsBuffer[15] = p4;
-                _boundsPointsBuffer[16] = p0; _boundsPointsBuffer[17] = p4;
-                _boundsPointsBuffer[18] = p1; _boundsPointsBuffer[19] = p5;
-                _boundsPointsBuffer[20] = p2; _boundsPointsBuffer[21] = p6;
-                _boundsPointsBuffer[22] = p3; _boundsPointsBuffer[23] = p7;
-                Handles.DrawLines(_boundsPointsBuffer);
+                if (width > 1f)
+                {
+                    // 粗线模式：每条边用 DrawAAPolyLine 绘制
+                    Handles.DrawAAPolyLine(width, p0, p1); Handles.DrawAAPolyLine(width, p1, p2);
+                    Handles.DrawAAPolyLine(width, p2, p3); Handles.DrawAAPolyLine(width, p3, p0);
+                    Handles.DrawAAPolyLine(width, p4, p5); Handles.DrawAAPolyLine(width, p5, p6);
+                    Handles.DrawAAPolyLine(width, p6, p7); Handles.DrawAAPolyLine(width, p7, p4);
+                    Handles.DrawAAPolyLine(width, p0, p4); Handles.DrawAAPolyLine(width, p1, p5);
+                    Handles.DrawAAPolyLine(width, p2, p6); Handles.DrawAAPolyLine(width, p3, p7);
+                }
+                else
+                {
+                    // 批量模式：一次 DrawLines 绘制 12 条边
+                    if (_boundsPointsBuffer == null) _boundsPointsBuffer = new Vector3[24];
+                    _boundsPointsBuffer[0] = p0; _boundsPointsBuffer[1] = p1;
+                    _boundsPointsBuffer[2] = p1; _boundsPointsBuffer[3] = p2;
+                    _boundsPointsBuffer[4] = p2; _boundsPointsBuffer[5] = p3;
+                    _boundsPointsBuffer[6] = p3; _boundsPointsBuffer[7] = p0;
+                    _boundsPointsBuffer[8] = p4; _boundsPointsBuffer[9] = p5;
+                    _boundsPointsBuffer[10] = p5; _boundsPointsBuffer[11] = p6;
+                    _boundsPointsBuffer[12] = p6; _boundsPointsBuffer[13] = p7;
+                    _boundsPointsBuffer[14] = p7; _boundsPointsBuffer[15] = p4;
+                    _boundsPointsBuffer[16] = p0; _boundsPointsBuffer[17] = p4;
+                    _boundsPointsBuffer[18] = p1; _boundsPointsBuffer[19] = p5;
+                    _boundsPointsBuffer[20] = p2; _boundsPointsBuffer[21] = p6;
+                    _boundsPointsBuffer[22] = p3; _boundsPointsBuffer[23] = p7;
+                    Handles.DrawLines(_boundsPointsBuffer);
+                }
             }
         }
 
@@ -301,23 +301,36 @@ namespace ModelBox
         public static Mesh GetOrBuildWireframeLineMesh(CachedMeshData data)
         {
             if (data == null || data.Vertices == null || data.Vertices.Length == 0) return null;
+            ModelBoxMeshCache.EnsureTopology(data, true);
             if (data.EdgeIndices == null || data.EdgeIndices.Length == 0) return null;
             if (data.Vertices.Length > MAX_LINE_MESH_VERTICES) return null;
-            if (data.WireframeLineMesh != null) return data.WireframeLineMesh;
+            if (data.WireframeLineMesh != null)
+            {
+                if (data.IsDynamic && data.WireframePoseVersion != data.PoseVersion)
+                {
+                    data.WireframeLineMesh.SetVertices(data.Vertices);
+                    data.WireframeLineMesh.bounds = data.PoseBounds;
+                    data.WireframePoseVersion = data.PoseVersion;
+                }
+                return data.WireframeLineMesh;
+            }
 
             var mesh = new Mesh
             {
                 name = "ModelBox_WF_Line",
+                hideFlags = HideFlags.HideAndDontSave,
                 vertices = data.Vertices,
                 // uv0.x 全 0 → shader 不拉伸；即使 normals 缺失拉伸贡献也为 0，数学安全
                 uv = new Vector2[data.Vertices.Length]
             };
+            if (data.IsDynamic) mesh.MarkDynamic();
             if (data.Vertices.Length > 65535) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
             mesh.SetIndices(data.EdgeIndices, MeshTopology.Lines, 0, false);
             // [fix] DrawMeshNow 不做视锥剔除（bounds 非必需），但保留有效 bounds 以避免
             // 调试器/Future 路径读到退化包围盒（默认 bounds 为零尺寸）
             mesh.RecalculateBounds();
             data.WireframeLineMesh = mesh;
+            data.WireframePoseVersion = data.PoseVersion;
             s_trackedLineMeshes.Add(mesh);
             return mesh;
         }
@@ -327,61 +340,115 @@ namespace ModelBox
         /// 拉伸量为 shader uniform（_Length），长度滑条变化零重建。
         /// 返回 null 表示应回退旧路径（数据缺失 / 超顶点上限）。
         /// </summary>
-        public static Mesh GetOrBuildStretchLineMesh(CachedMeshData data, bool tangents)
+        public static Mesh GetOrBuildStretchLineMesh(CachedMeshData data, bool tangents, bool thick = false)
         {
             if (data == null || data.Vertices == null || data.Vertices.Length == 0) return null;
-            if (data.Vertices.Length > MAX_LINE_MESH_VERTICES / 2) return null;
-            if (!tangents && data.NormalLineMesh != null) return data.NormalLineMesh;
-            if (tangents && data.TangentLineMesh != null) return data.TangentLineMesh;
-
-            Vector3[] dirs;
-            if (tangents)
+            int copies = thick ? 4 : 2;
+            if (data.Vertices.Length > MAX_LINE_MESH_VERTICES / copies) return null;
+            if (tangents && (data.Tangents == null || data.Tangents.Length < data.Vertices.Length)) return null;
+            if (!tangents && (data.Normals == null || data.Normals.Length < data.Vertices.Length)) return null;
+            var cached = tangents ? (thick ? data.TangentThickLineMesh : data.TangentLineMesh)
+                : (thick ? data.NormalThickLineMesh : data.NormalLineMesh);
+            if (cached != null)
             {
-                if (data.Tangents == null || data.Tangents.Length < data.Vertices.Length) return null;
-                dirs = new Vector3[data.Vertices.Length];
-                for (int i = 0; i < data.Vertices.Length; i++)
+                if (data.IsDynamic)
                 {
-                    var t = data.Tangents[i];
-                    dirs[i] = new Vector3(t.x, t.y, t.z).normalized;
+                    foreach (var existing in data.DirectionLines)
+                    {
+                        if (existing.Mesh != cached || existing.PoseVersion == data.PoseVersion) continue;
+                        FillDirectionLines(data, existing);
+                        cached.SetVertices(existing.Positions);
+                        cached.SetNormals(existing.Directions);
+                        cached.bounds = data.PoseBounds;
+                        existing.PoseVersion = data.PoseVersion;
+                        break;
+                    }
                 }
-            }
-            else
-            {
-                if (data.Normals == null || data.Normals.Length < data.Vertices.Length) return null;
-                dirs = data.Normals;
+                return cached;
             }
 
             int n = data.Vertices.Length;
-            var pos = new Vector3[n * 2];
-            var nrm = new Vector3[n * 2];
-            var uv = new Vector2[n * 2];
-            var idx = new int[n * 2];
+            var line = new CachedDirectionLines
+            {
+                Positions = new Vector3[n * copies],
+                Directions = new Vector3[n * copies],
+                Tangents = tangents,
+                Copies = copies,
+                PoseVersion = data.PoseVersion
+            };
+            FillDirectionLines(data, line);
+            var uv = new Vector2[n * copies];
+            var idx = new int[n * (thick ? 6 : 2)];
             for (int i = 0; i < n; i++)
             {
-                int a = i * 2, b = a + 1;
-                pos[a] = data.Vertices[i];
-                pos[b] = data.Vertices[i];
-                nrm[a] = dirs[i];
-                nrm[b] = dirs[i];
-                uv[a] = Vector2.zero; // 起点：不拉伸
-                uv[b] = Vector2.one;  // 终点：按 _Length 拉伸
-                idx[a] = a;
-                idx[b] = b;
+                int a = i * copies;
+                if (thick)
+                {
+                    uv[a] = new Vector2(0f, -1f);
+                    uv[a + 1] = new Vector2(0f, 1f);
+                    uv[a + 2] = new Vector2(1f, -1f);
+                    uv[a + 3] = new Vector2(1f, 1f);
+                    int t = i * 6;
+                    idx[t] = a; idx[t + 1] = a + 1; idx[t + 2] = a + 2;
+                    idx[t + 3] = a + 2; idx[t + 4] = a + 1; idx[t + 5] = a + 3;
+                }
+                else
+                {
+                    uv[a] = Vector2.zero;
+                    uv[a + 1] = new Vector2(1f, 0f);
+                    idx[a] = a;
+                    idx[a + 1] = a + 1;
+                }
             }
 
-            var mesh = new Mesh { name = tangents ? "ModelBox_Tan_Line" : "ModelBox_Nrm_Line" };
-            if (n * 2 > 65535) mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
-            mesh.vertices = pos;
-            mesh.normals = nrm;
+            var mesh = new Mesh
+            {
+                name = tangents ? "ModelBox_Tan_Line" : "ModelBox_Nrm_Line",
+                hideFlags = HideFlags.HideAndDontSave
+            };
+            if (data.IsDynamic) mesh.MarkDynamic();
+            if (n * copies > 65535) mesh.indexFormat = IndexFormat.UInt32;
+            mesh.vertices = line.Positions;
+            mesh.normals = line.Directions;
             mesh.uv = uv;
-            mesh.SetIndices(idx, MeshTopology.Lines, 0, false);
+            mesh.SetIndices(idx, thick ? MeshTopology.Triangles : MeshTopology.Lines, 0, false);
             // [fix] 同线框网格：DrawMeshNow 不剔除，仅保证 bounds 有效（不含拉伸量，无实际影响）
             mesh.RecalculateBounds();
 
-            if (tangents) data.TangentLineMesh = mesh;
-            else data.NormalLineMesh = mesh;
+            if (thick)
+            {
+                if (tangents) data.TangentThickLineMesh = mesh;
+                else data.NormalThickLineMesh = mesh;
+            }
+            else
+            {
+                if (tangents) data.TangentLineMesh = mesh;
+                else data.NormalLineMesh = mesh;
+            }
+            line.Mesh = mesh;
+            data.DirectionLines.Add(line);
             s_trackedLineMeshes.Add(mesh);
             return mesh;
+        }
+
+        private static void FillDirectionLines(CachedMeshData data, CachedDirectionLines line)
+        {
+            for (int i = 0; i < data.Vertices.Length; i++)
+            {
+                Vector3 direction;
+                if (line.Tangents)
+                {
+                    var t = data.Tangents[i];
+                    direction = new Vector3(t.x, t.y, t.z).normalized;
+                }
+                else direction = data.Normals[i];
+                for (int j = 0; j < line.Copies; j++)
+                {
+                    int index = i * line.Copies + j;
+                    line.Positions[index] = data.Vertices[i];
+                    line.Directions[index] = direction;
+                }
+            }
         }
 
         // [fix] 共享 OverlayLine 材质的 _ZTest 状态跟踪（dirty check）：
@@ -414,7 +481,7 @@ namespace ModelBox
         /// stretchLength > 0 时 tip 顶点沿烘焙方向拉伸（法线/切线）；为 0 时原样渲染（线框）。
         /// </summary>
         public static void DrawOverlayLineMesh(Mesh lineMesh, Matrix4x4 localToWorld, Camera camera,
-            Color color, float stretchLength, bool depthTest)
+            Color color, float stretchLength, bool depthTest, float width = 1f)
         {
             // [fix] 立即模式绘制仅在 Repaint 事件有效（与 Handles.DrawLine 一致）；
             // Layout/MouseMove 等事件中 DrawMeshNow 无渲染目标，纯浪费且可能产生告警
@@ -431,16 +498,19 @@ namespace ModelBox
             }
             mat.SetColor("_Color", color);
             mat.SetFloat("_Length", stretchLength);
+            mat.SetFloat("_LineWidth", width > 1f ? width * EditorGUIUtility.pixelsPerPoint : 0f);
+            mat.SetVector("_ViewportSize", new Vector4(camera.pixelWidth, camera.pixelHeight, 0f, 0f));
 
-            // 显式设置 SceneView 相机矩阵（duringSceneGui 期间 GL 状态），确保绘制落在正确相机空间。
-            // CG shader 的 UNITY_MATRIX_MVP = GL.projection × GL.modelview × DrawMeshNow 矩阵
-            // = projection × (worldToCamera × localToWorld) × identity，数学自洽。
+            // 相机矩阵与物体矩阵分开提交：DrawMeshNow 会设置模型变换，
+            // 把 localToWorld 仅放入 GL.modelview 再传 identity 会丢失物体的移动和旋转。
             GL.PushMatrix();
             GL.LoadProjectionMatrix(camera.projectionMatrix);
-            GL.modelview = camera.worldToCameraMatrix * localToWorld;
-            mat.SetPass(0);
-            Graphics.DrawMeshNow(lineMesh, Matrix4x4.identity);
-            GL.PopMatrix();
+            GL.modelview = camera.worldToCameraMatrix;
+            try
+            {
+                if (mat.SetPass(0)) Graphics.DrawMeshNow(lineMesh, localToWorld);
+            }
+            finally { GL.PopMatrix(); }
         }
 
         /// <summary>
@@ -535,6 +605,7 @@ namespace ModelBox
             float opacity = 1.0f)
         {
             if (data == null || data.Vertices == null || data.Vertices.Length == 0) return;
+            ModelBoxMeshCache.EnsureTopology(data, false);
             if (vertexWeights == null || vertexWeights.Length != data.Vertices.Length) return;
             // [fix v0.4.1] TriangleIndices 可能为 null（空网格或读取失败）
             if (data.TriangleIndices == null || data.TriangleIndices.Length == 0) return;
@@ -775,7 +846,7 @@ namespace ModelBox
 
         /// <summary>
         /// 烘焙 SkinnedMeshRenderer 获取当前姿态的网格数据。[Task 9]
-        /// 调用方需在每帧需要时调用此方法，返回的 CachedMeshData 在下次调用前有效。
+        /// 每个 Renderer 独立复用姿态数组；拓扑和线网格按需创建。
         /// 注意：Unity 2020.2+ BakeMesh 输出为 renderer 本地空间，配合 localToWorldMatrix 使用。
         /// </summary>
         public static CachedMeshData BakeSkinnedMesh(SkinnedMeshRenderer smr)
@@ -785,53 +856,71 @@ namespace ModelBox
             if (smr.sharedMesh == null) return null;
 
             if (_bakeMesh == null)
-                _bakeMesh = new Mesh { name = "SkinnedBakeTemp" };
+                _bakeMesh = new Mesh { name = "SkinnedBakeTemp", hideFlags = HideFlags.HideAndDontSave };
 
-            smr.BakeMesh(_bakeMesh);
+            // 显式保留 Renderer 缩放约定；默认重载在父级缩放时会重复计入缩放。
+            smr.BakeMesh(_bakeMesh, true);
 
-            // [R5 fix] 检测源网格变化（拓扑改变时重建边列表）
             Mesh sourceMesh = smr.sharedMesh;
-            if (_bakedSourceMesh != sourceMesh)
+            if (!_skinnedCache.TryGetValue(smr, out var data) || data.SourceMesh != sourceMesh)
             {
-                _bakedSourceMesh = sourceMesh;
-                if (_bakedCache != null) _bakedCache.EdgeIndices = null; // 强制重建
+                if (data != null) ReleaseLineMeshes(data);
+                data = new CachedMeshData { SourceMesh = sourceMesh, IsDynamic = true };
+                _skinnedCache[smr] = data;
             }
 
-            if (_bakedCache == null) _bakedCache = new CachedMeshData();
-
-            // [perf] 使用 GetVertices(List) 避免每帧分配 managed 数组。
-            // List 内部数组仅在容量不足时才重新分配，后续帧复用同一块内存。
             _bakeMesh.GetVertices(_bakeVertBuf);
             _bakeMesh.GetNormals(_bakeNormBuf);
             _bakeMesh.GetTangents(_bakeTanBuf);
-
-            // 仅在顶点数变化时才重新分配输出数组（下游需要 Vector3[] 索引访问）
-            int vertCount = _bakeVertBuf.Count;
-            if (vertCount != _bakeLastVertCount)
+            if (data.Vertices != null && data.Vertices.Length != _bakeVertBuf.Count)
             {
-                _bakeLastVertCount = vertCount;
-                _bakedCache.Vertices = _bakeVertBuf.ToArray();
-                _bakedCache.Normals = _bakeNormBuf.Count > 0 ? _bakeNormBuf.ToArray() : null;
-                _bakedCache.Tangents = _bakeTanBuf.Count > 0 ? _bakeTanBuf.ToArray() : null;
+                ReleaseLineMeshes(data);
+                ModelBoxMeshCache.InvalidateMesh(sourceMesh);
+                data.TriangleIndices = null;
+                data.EdgeIndices = null;
             }
-            else
-            {
-                // 顶点数不变，直接覆盖已有数组内容（零分配）
-                _bakeVertBuf.CopyTo(_bakedCache.Vertices);
-                if (_bakeNormBuf.Count > 0 && _bakedCache.Normals != null)
-                    _bakeNormBuf.CopyTo(_bakedCache.Normals);
-                if (_bakeTanBuf.Count > 0 && _bakedCache.Tangents != null)
-                    _bakeTanBuf.CopyTo(_bakedCache.Tangents);
-            }
+            data.Vertices = CopyBakedAttribute(_bakeVertBuf, data.Vertices);
+            data.Normals = CopyBakedAttribute(_bakeNormBuf, data.Normals);
+            data.Tangents = CopyBakedAttribute(_bakeTanBuf, data.Tangents);
 
-            // 边列表仅在拓扑变化时重建
-            if (_bakedCache.EdgeIndices == null || _bakedCache.TriangleIndices == null)
-            {
-                _bakedCache.TriangleIndices = _bakeMesh.triangles;
-                _bakedCache.EdgeIndices = ModelBoxMeshCache.BuildEdgeListPublic(_bakeMesh.triangles);
-            }
+            data.PoseBounds = _bakeMesh.bounds;
+            data.PoseVersion++;
 
-            return _bakedCache;
+            return data;
+        }
+
+        private static T[] CopyBakedAttribute<T>(System.Collections.Generic.List<T> source, T[] destination)
+        {
+            if (source.Count == 0) return null;
+            if (destination == null || destination.Length != source.Count) destination = new T[source.Count];
+            source.CopyTo(destination);
+            return destination;
+        }
+
+        private static void ReleaseLineMeshes(CachedMeshData data)
+        {
+            if (data.WireframeLineMesh != null)
+            {
+                s_trackedLineMeshes.Remove(data.WireframeLineMesh);
+                Object.DestroyImmediate(data.WireframeLineMesh);
+            }
+            foreach (var line in data.DirectionLines)
+            {
+                s_trackedLineMeshes.Remove(line.Mesh);
+                if (line.Mesh != null) Object.DestroyImmediate(line.Mesh);
+            }
+            data.DirectionLines.Clear();
+            data.WireframeLineMesh = null;
+            data.NormalLineMesh = null;
+            data.TangentLineMesh = null;
+            data.NormalThickLineMesh = null;
+            data.TangentThickLineMesh = null;
+        }
+
+        internal static void ClearSkinnedCache()
+        {
+            foreach (var data in _skinnedCache.Values) ReleaseLineMeshes(data);
+            _skinnedCache.Clear();
         }
 
         /// <summary>
@@ -839,6 +928,7 @@ namespace ModelBox
         /// </summary>
         public static void Cleanup()
         {
+            ClearSkinnedCache();
             if (_lineMaterial != null && !_lineMaterialIsInternal) { Object.DestroyImmediate(_lineMaterial); }
             _lineMaterial = null;
             if (_vertexMaterial != null) { Object.DestroyImmediate(_vertexMaterial); _vertexMaterial = null; }
@@ -869,12 +959,9 @@ namespace ModelBox
             _directionIndicesBuffer = null;
             _boundsPointsBuffer = null;
             _axisLabelStyles = null; // [feat v0.6] 局部坐标轴标签样式缓存
-            _bakedCache = null;
-            _bakedSourceMesh = null;
             _bakeVertBuf.Clear();
             _bakeNormBuf.Clear();
             _bakeTanBuf.Clear();
-            _bakeLastVertCount = 0;
             _lineMaterialResolved = false;
             _lineMaterialIsInternal = false;
             // [fix] 重置视锥平面缓存（虽然域重载后会自动重新初始化，保持一致性）
@@ -913,8 +1000,6 @@ namespace ModelBox
                 _directionLinesBuffer[idx++] = end;
             }
 
-            Handles.color = color;
-
             // [fix] 索引数组必须精确匹配 pairCount，否则 Handles.DrawLines 会画残留脏数据
             if (_directionIndicesBuffer == null || _directionIndicesBuffer.Length != pairCount)
             {
@@ -922,7 +1007,8 @@ namespace ModelBox
                 for (int j = 0; j < pairCount; j++) _directionIndicesBuffer[j] = j;
             }
 
-            Handles.DrawLines(_directionLinesBuffer, _directionIndicesBuffer);
+            using (new Handles.DrawingScope(color, Matrix4x4.identity))
+                Handles.DrawLines(_directionLinesBuffer, _directionIndicesBuffer);
         }
 
         /// <summary>
@@ -938,18 +1024,15 @@ namespace ModelBox
 
             int step = ComputeVertexLODStep(worldBounds, camera, verts.Length);
 
-            Handles.matrix = localToWorld;
-            Handles.color = color;
-
-            for (int i = 0; i < verts.Length; i += step)
+            using (new Handles.DrawingScope(color, localToWorld))
             {
-                Vector3 start = verts[i];
-                Vector3 end = start + dirs[i] * length;
-                Handles.DrawAAPolyLine(width, start, end);
+                for (int i = 0; i < verts.Length; i += step)
+                {
+                    Vector3 start = verts[i];
+                    Vector3 end = start + dirs[i] * length;
+                    Handles.DrawAAPolyLine(width, start, end);
+                }
             }
-
-            // [fix] 重置矩阵，避免影响后续 Handles 绘制
-            Handles.matrix = Matrix4x4.identity;
         }
 
         // ========== LOD [Task 8] ==========

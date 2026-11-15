@@ -10,6 +10,15 @@ namespace ModelBox
     /// </summary>
     public class CachedMeshData
     {
+        internal Mesh SourceMesh;
+        internal bool IsDynamic;
+        internal int PoseVersion;
+        internal int WireframePoseVersion;
+        internal Bounds PoseBounds;
+        internal readonly List<CachedDirectionLines> DirectionLines = new List<CachedDirectionLines>();
+        internal Mesh NormalThickLineMesh;
+        internal Mesh TangentThickLineMesh;
+
         public Vector3[] Vertices;
         public Vector3[] Normals;
         public Vector4[] Tangents;
@@ -31,38 +40,73 @@ namespace ModelBox
         public Mesh TangentLineMesh;
     }
 
+    internal sealed class CachedDirectionLines
+    {
+        public Mesh Mesh;
+        public Vector3[] Positions;
+        public Vector3[] Directions;
+        public bool Tangents;
+        public int Copies;
+        public int PoseVersion;
+    }
+
     [InitializeOnLoad]
     public static class ModelBoxMeshCache
     {
         private static readonly Dictionary<Mesh, CachedMeshData> _cache = new Dictionary<Mesh, CachedMeshData>();
+        private static readonly EdgeKeyComparer _edgeComparer = new EdgeKeyComparer();
+
+        private sealed class EdgeKeyComparer : IEqualityComparer<long>
+        {
+            public bool Equals(long x, long y) => x == y;
+
+            public int GetHashCode(long value)
+            {
+                // Int64 默认高低位异或会让连续顶点边大量碰撞。
+                unchecked
+                {
+                    uint hash = (uint)(value >> 32) * 0x9E3779B9u + (uint)value;
+                    hash = (hash ^ (hash >> 16)) * 0x85EBCA6Bu;
+                    return (int)(hash ^ (hash >> 13));
+                }
+            }
+        }
 
         static ModelBoxMeshCache()
         {
             AssemblyReloadEvents.beforeAssemblyReload += Invalidate;
         }
 
-        public static CachedMeshData GetOrBuild(Mesh mesh)
+        public static CachedMeshData GetOrBuild(Mesh mesh, bool includeTopology = true)
         {
             if (mesh == null) return null;
 
-            if (_cache.TryGetValue(mesh, out var cached))
-                return cached;
-
-            var tris = mesh.triangles;
-            var edgeIndices = BuildEdgeList(tris);
-
-            cached = new CachedMeshData
+            if (!_cache.TryGetValue(mesh, out var cached))
             {
-                Vertices = mesh.vertices,
-                Normals = mesh.normals,
-                Tangents = mesh.tangents,
-                TriangleIndices = tris,
-                EdgeIndices = edgeIndices,
-                Bindposes = mesh.bindposes,
-            };
+                cached = new CachedMeshData
+                {
+                    SourceMesh = mesh,
+                    Vertices = mesh.vertices,
+                    Normals = mesh.normals,
+                    Tangents = mesh.tangents,
+                    Bindposes = mesh.bindposes,
+                };
+                _cache[mesh] = cached;
+            }
 
-            _cache[mesh] = cached;
+            if (includeTopology) EnsureTopology(cached, true);
             return cached;
+        }
+
+        internal static void EnsureTopology(CachedMeshData data, bool includeEdges)
+        {
+            if (data == null || data.SourceMesh == null) return;
+            var source = GetOrBuild(data.SourceMesh, false);
+            if (source.TriangleIndices == null) source.TriangleIndices = data.SourceMesh.triangles;
+            if (includeEdges && source.EdgeIndices == null)
+                source.EdgeIndices = BuildEdgeList(source.TriangleIndices);
+            data.TriangleIndices = source.TriangleIndices;
+            if (includeEdges) data.EdgeIndices = source.EdgeIndices;
         }
 
         /// <summary>
@@ -81,7 +125,7 @@ namespace ModelBox
         {
             // 估算边数：三角形数 × 1.5（共享边约占 1/3）
             int triCount = tris.Length / 3;
-            var edgeSet = new HashSet<long>(triCount * 2);
+            var edgeSet = new HashSet<long>(triCount * 2, _edgeComparer);
 
             for (int i = 0; i < tris.Length; i += 3)
             {

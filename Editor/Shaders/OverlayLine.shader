@@ -4,6 +4,8 @@ Shader "Hidden/ModelBox/OverlayLine"
     {
         _Color("Color", Color) = (1, 1, 1, 1)
         _Length("Stretch Length", Float) = 0.1
+        _LineWidth("Line Width", Float) = 0
+        _ViewportSize("Viewport Size", Vector) = (1, 1, 1, 1)
         _ZTest("ZTest", Int) = 4
     }
 
@@ -41,12 +43,14 @@ Shader "Hidden/ModelBox/OverlayLine"
 
             half4 _Color;
             float _Length;
+            float _LineWidth;
+            float4 _ViewportSize;
 
             struct appdata
             {
                 float4 vertex : POSITION;   // 线段基点（局部空间）
                 float3 normal : NORMAL;     // 拉伸方向（局部空间；线框网格无法线语义时为 0）
-                float2 uv     : TEXCOORD0;  // x: 0=起点(不拉伸) 1=终点(按 _Length 拉伸)
+                float2 uv     : TEXCOORD0;  // x: 0=起点 1=终点；粗线 y: -1/+1 两侧
             };
 
             struct v2f
@@ -57,8 +61,25 @@ Shader "Hidden/ModelBox/OverlayLine"
             v2f vert(appdata v)
             {
                 v2f o;
-                float3 pos = v.vertex.xyz + v.normal * (_Length * v.uv.x);
-                o.pos = UnityObjectToClipPos(pos);
+                if (_LineWidth > 0)
+                {
+                    float4 start = UnityObjectToClipPos(v.vertex.xyz);
+                    float4 end = UnityObjectToClipPos(v.vertex.xyz + v.normal * _Length);
+                    float startW = start.w < 0 ? min(start.w, -1e-5) : max(start.w, 1e-5);
+                    float endW = end.w < 0 ? min(end.w, -1e-5) : max(end.w, 1e-5);
+                    float2 viewport = max(_ViewportSize.xy, float2(1, 1));
+                    float2 direction = (end.xy / endW - start.xy / startW) * viewport;
+                    float2 perpendicular = float2(-direction.y, direction.x)
+                        * rsqrt(max(dot(direction, direction), 1e-12));
+                    o.pos = lerp(start, end, v.uv.x);
+                    // NDC 的 2 倍像素换算与半宽抵消；自有 viewport 不依赖 SRP 相机常量。
+                    o.pos.xy += perpendicular * (v.uv.y * _LineWidth) / viewport * o.pos.w;
+                }
+                else
+                {
+                    float3 pos = v.vertex.xyz + v.normal * (_Length * v.uv.x);
+                    o.pos = UnityObjectToClipPos(pos);
+                }
                 return o;
             }
 

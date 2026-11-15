@@ -174,6 +174,7 @@ namespace ModelBox
 
         private void OnSelectionChanged()
         {
+            ModelBoxOverlayRenderer.ClearSkinnedCache();
             // 仅在选区调试模式活跃时执行迁移
             if (CurrentMode == SelectionDebugMode.None) return;
 
@@ -551,6 +552,13 @@ namespace ModelBox
             var selected = Selection.activeTransform;
             if (selected == null) return;
 
+            // 网格准备只服务于绘制；骨骼拾取仍需处理 MouseDown 等事件。
+            if (Event.current == null || Event.current.type != EventType.Repaint)
+            {
+                if (hasBoneGizmos && Event.current != null) DrawBoneGizmos(sceneView);
+                return;
+            }
+
             var camera = sceneView.camera;
 
             // [perf v0.6] 仅存在需要网格数据的叠加（线框/顶点/法线/切线/AABB）或骨骼权重可视化时
@@ -638,6 +646,7 @@ namespace ModelBox
 
         private void DrawMeshOverlay(Renderer renderer, Mesh mesh, Camera camera, bool isSkinned = false, SkinnedMeshRenderer smr = null)
         {
+            if (Event.current == null || Event.current.type != EventType.Repaint) return;
             CachedMeshData data;
 
             // [fix] 骨骼权重可视化也需要烘焙蒙皮网格，确保顶点位置匹配当前动画姿态
@@ -645,8 +654,11 @@ namespace ModelBox
                 && BoneWeightTargetSMR != null && renderer is SkinnedMeshRenderer smrCheck && smrCheck == BoneWeightTargetSMR;
 
             // 蒙皮网格烘焙：有显式叠加标志 或 骨骼权重可视化激活时执行
-            bool needsSkinnedPose = isSkinned && UseGPURendering && smr != null
-                && ((OverlayFlags != MeshOverlayFlags.None) || hasBoneWeight);
+            bool needsSkinnedPose = isSkinned && smr != null
+                && (((OverlayFlags & (MeshOverlayFlags.Wireframe | MeshOverlayFlags.Vertices |
+                      MeshOverlayFlags.Normals | MeshOverlayFlags.Tangents)) != 0) || hasBoneWeight);
+            bool needsTopology = (OverlayFlags & MeshOverlayFlags.Wireframe) != 0
+                || (hasBoneWeight && BoneWeightMode == BoneWeightDisplayMode.ColorMap);
 
             if (needsSkinnedPose)
             {
@@ -654,22 +666,33 @@ namespace ModelBox
             }
             else
             {
-                data = ModelBoxMeshCache.GetOrBuild(mesh);
+                data = ModelBoxMeshCache.GetOrBuild(mesh, needsTopology);
             }
 
             if (data == null) return;
+            if (needsTopology) ModelBoxMeshCache.EnsureTopology(data, (OverlayFlags & MeshOverlayFlags.Wireframe) != 0);
 
-            if (UseGPURendering)
-                DrawMeshOverlayGPU(renderer, data, camera, isSkinned);
-            else
-                DrawMeshOverlayLegacy(renderer, data);
+            var previousZTest = Handles.zTest;
+            using (new Handles.DrawingScope(Matrix4x4.identity))
+            {
+                try
+                {
+                    if (UseGPURendering)
+                        DrawMeshOverlayGPU(renderer, data, camera);
+                    else
+                        DrawMeshOverlayLegacy(renderer, data);
+                }
+                finally
+                {
+                    Handles.zTest = previousZTest;
+                }
+            }
         }
 
         /// <summary>
-        /// GPU 批量渲染路径：GL.LINES + Graphics.DrawMeshInstanced。
-        /// 每帧仅 1~4 次 draw call，高面数场景下性能提升数百倍。
+        /// GPU 批量渲染路径：缓存线网格 + 顶点球体实例化。
         /// </summary>
-        private void DrawMeshOverlayGPU(Renderer renderer, CachedMeshData data, Camera camera, bool isSkinned)
+        private void DrawMeshOverlayGPU(Renderer renderer, CachedMeshData data, Camera camera)
         {
             // Unity 2020.2+ BakeMesh 输出在 renderer 本地空间，配合 localToWorldMatrix 正确。
             var matrix = renderer.transform.localToWorldMatrix;
@@ -682,9 +705,7 @@ namespace ModelBox
 
             if ((OverlayFlags & MeshOverlayFlags.Wireframe) != 0)
             {
-                // [perf v0.6] 静态网格优先走烘焙线网格（1 次 DrawMeshNow，顶点变换由 GPU 完成，零逐帧 CPU）；
-                // 蒙皮顶点逐帧变化，保持原路径
-                var wfMesh = isSkinned ? null : ModelBoxOverlayRenderer.GetOrBuildWireframeLineMesh(data);
+                var wfMesh = ModelBoxOverlayRenderer.GetOrBuildWireframeLineMesh(data);
                 if (wfMesh != null)
                 {
                     ModelBoxOverlayRenderer.DrawOverlayLineMesh(wfMesh, matrix, camera, WireframeColor, 0f, depthTest);
@@ -729,11 +750,10 @@ namespace ModelBox
 
             if ((OverlayFlags & MeshOverlayFlags.Normals) != 0)
             {
-                // [perf v0.6] 宽度 ≤1 走烘焙拉伸线网格（_Length uniform，滑条零重建）；>1 保留逐线粗线（高面数明显变慢）
-                var nMesh = (isSkinned || NormalWidth > 1f) ? null : ModelBoxOverlayRenderer.GetOrBuildStretchLineMesh(data, false);
+                var nMesh = ModelBoxOverlayRenderer.GetOrBuildStretchLineMesh(data, false, NormalWidth > 1f);
                 if (nMesh != null)
                 {
-                    ModelBoxOverlayRenderer.DrawOverlayLineMesh(nMesh, matrix, camera, NormalColor, NormalLength, depthTest);
+                    ModelBoxOverlayRenderer.DrawOverlayLineMesh(nMesh, matrix, camera, NormalColor, NormalLength, depthTest, NormalWidth);
                 }
                 else
                 {
@@ -744,11 +764,10 @@ namespace ModelBox
 
             if ((OverlayFlags & MeshOverlayFlags.Tangents) != 0)
             {
-                // [perf v0.6] 同法线：宽度 ≤1 走烘焙拉伸线网格
-                var tMesh = (isSkinned || TangentWidth > 1f) ? null : ModelBoxOverlayRenderer.GetOrBuildStretchLineMesh(data, true);
+                var tMesh = ModelBoxOverlayRenderer.GetOrBuildStretchLineMesh(data, true, TangentWidth > 1f);
                 if (tMesh != null)
                 {
-                    ModelBoxOverlayRenderer.DrawOverlayLineMesh(tMesh, matrix, camera, TangentColor, TangentLength, depthTest);
+                    ModelBoxOverlayRenderer.DrawOverlayLineMesh(tMesh, matrix, camera, TangentColor, TangentLength, depthTest, TangentWidth);
                 }
                 else
                 {
