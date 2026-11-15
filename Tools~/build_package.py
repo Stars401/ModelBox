@@ -47,7 +47,11 @@ def meta_path(rel, is_dir):
 
 def read_meta(rel, is_dir):
     if not rel:  # 包根目录在仓库内没有 .meta（它本身是 package 根），用确定性 GUID
-        return None, uuid.uuid5(uuid.NAMESPACE_URL, "unity:" + ZIP_ROOT).hex
+        guid = uuid.uuid5(uuid.NAMESPACE_URL, "unity:" + ZIP_ROOT).hex
+        data = (f"fileFormatVersion: 2\nguid: {guid}\nfolderAsset: yes\n"
+                "DefaultImporter:\n  externalObjects: {}\n  userData: \n"
+                "  assetBundleName: \n  assetBundleVariant: \n").encode("utf-8")
+        return data, guid
     with open(meta_path(rel, is_dir), "rb") as f:
         data = f.read()
     m = GUID_RE.search(data.decode("utf-8"))
@@ -73,8 +77,7 @@ def build_unitypackage(entries, out_path):
                 sys.exit(f"ERROR: GUID 重复 {guid}: {seen_guids[guid]} vs {rel}")
             seen_guids[guid] = rel
             pathname = ASSETS_PREFIX + (("/" + rel) if rel else "")
-            if meta_bytes is not None:
-                add(f"{guid}/asset.meta", meta_bytes)
+            add(f"{guid}/asset.meta", meta_bytes)
             add(f"{guid}/pathname", pathname.encode("utf-8"))
             if not is_dir:
                 with open(os.path.join(ROOT, rel), "rb") as f:
@@ -85,25 +88,70 @@ def build_unitypackage(entries, out_path):
 def build_zip(entries, out_path):
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as zf:
         for rel, is_dir in entries:
-            if is_dir:
-                continue
             zf.write(os.path.join(ROOT, rel), f"{ZIP_ROOT}/{rel}")
-            zf.write(os.path.join(ROOT, rel + ".meta"), f"{ZIP_ROOT}/{rel}.meta")
+            if rel:
+                zf.write(os.path.join(ROOT, rel + ".meta"), f"{ZIP_ROOT}/{rel}.meta")
 
 
-def validate(upkg_path):
+def expected_members(entries, unitypackage):
+    expected = {}
+    seen_guids = {}
+    for rel, is_dir in entries:
+        meta_bytes, guid = read_meta(rel, is_dir)
+        if guid in seen_guids:
+            sys.exit(f"ERROR: GUID 重复 {guid}: {seen_guids[guid]} vs {rel}")
+        seen_guids[guid] = rel
+        if unitypackage:
+            expected[f"{guid}/asset.meta"] = meta_bytes
+            pathname = ASSETS_PREFIX + (("/" + rel) if rel else "")
+            expected[f"{guid}/pathname"] = pathname.encode("utf-8")
+            asset_name = f"{guid}/asset"
+        else:
+            asset_name = f"{ZIP_ROOT}/{rel}"
+            if is_dir:
+                expected[asset_name.rstrip("/") + "/"] = None
+            if rel:
+                expected[f"{ZIP_ROOT}/{rel}.meta"] = meta_bytes
+        if not is_dir:
+            with open(os.path.join(ROOT, rel), "rb") as f:
+                expected[asset_name] = f.read()
+    return expected
+
+
+def validate_members(expected, members):
+    """None 表示真实目录；普通文件必须与源字节完全一致。"""
+    seen = set()
+    problems = []
+    for name, data in members:
+        if name in seen:
+            problems.append(f"{name}: 归档条目重复")
+        seen.add(name)
+        if name not in expected:
+            problems.append(f"{name}: 非预期条目")
+        elif data != expected[name]:
+            problems.append(f"{name}: 内容或类型与源数据不一致")
+    for name in sorted(expected.keys() - seen):
+        problems.append(f"{name}: 缺少条目")
+    if problems:
+        sys.exit("VALIDATION FAILED:\n" + "\n".join(problems))
+
+
+def validate(upkg_path, entries=None):
+    entries = collect_entries() if entries is None else entries
+    expected = expected_members(entries, unitypackage=True)
     with tarfile.open(upkg_path, "r:gz") as tar:
-        names = set(tar.getnames())
-        guids = {n.split("/")[0] for n in names}
-        problems = []
-        for g in guids:
-            if f"{g}/pathname" not in names:
-                problems.append(f"{g}: 缺 pathname")
-            if f"{g}/asset" in names and f"{g}/asset.meta" not in names:
-                problems.append(f"{g}: 有 asset 但缺 asset.meta")
-        if problems:
-            sys.exit("VALIDATION FAILED:\n" + "\n".join(problems))
-        return len(guids)
+        validate_members(expected, ((member.name, tar.extractfile(member).read() if member.isfile() else None)
+                                    for member in tar.getmembers()))
+    return len(entries)
+
+
+def validate_zip(zip_path, entries=None):
+    entries = collect_entries() if entries is None else entries
+    expected = expected_members(entries, unitypackage=False)
+    with zipfile.ZipFile(zip_path) as zf:
+        validate_members(expected, ((member.filename, None if member.is_dir() else zf.read(member))
+                                    for member in zf.infolist()))
+    return len(entries)
 
 
 def main():
@@ -118,10 +166,11 @@ def main():
     build_unitypackage(entries, upkg)
     build_zip(entries, zipp)
 
-    n = validate(upkg)
+    n = validate(upkg, entries)
+    validate_zip(zipp, entries)
     for p in (upkg, zipp):
         print(f"{os.path.basename(p):44s} {os.path.getsize(p) / 1024:8.1f} KB")
-    print(f"条目: {len(entries)} (文件 {len(files)}) | unitypackage GUID 目录: {n} | 结构校验通过")
+    print(f"条目: {len(entries)} (文件 {len(files)}) | unitypackage GUID 目录: {n} | 两归档结构、源字节及 GUID 校验通过")
 
 
 if __name__ == "__main__":
